@@ -65,6 +65,7 @@ func (s *CaptureService) Ingest(ctx context.Context, events []domain.Event) (Ing
 		}
 		remaining := s.config.MaxEvents - len(current.Events)
 		acceptedBatch := make([]domain.Event, 0, len(batch))
+		sanitizationDiagnostics := make([]domain.Diagnostic, 0)
 		batchDuplicates := 0
 		limitReached := false
 		for _, event := range batch {
@@ -82,11 +83,11 @@ func (s *CaptureService) Ingest(ctx context.Context, events []domain.Event) (Ing
 			for i := range diagnostics {
 				diagnostics[i].CreatedAt = now
 			}
-			total.Diagnostics = append(total.Diagnostics, diagnostics...)
+			sanitizationDiagnostics = append(sanitizationDiagnostics, diagnostics...)
 			acceptedBatch = append(acceptedBatch, event)
 			remaining--
 		}
-		result, err := s.store.AppendBounded(ctx, acceptedBatch, s.config.MaxEvents)
+		result, err := s.store.AppendBounded(ctx, acceptedBatch, s.config.MaxEvents, sanitizationDiagnostics)
 		if err != nil {
 			return total, err
 		}

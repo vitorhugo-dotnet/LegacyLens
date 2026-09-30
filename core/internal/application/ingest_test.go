@@ -54,8 +54,10 @@ func (s *memoryCaptureStore) Append(_ context.Context, events []domain.Event) (I
 	}
 	return result, nil
 }
-func (s *memoryCaptureStore) AppendBounded(ctx context.Context, events []domain.Event, _ int) (IngestResult, error) {
-	return s.Append(ctx, events)
+func (s *memoryCaptureStore) AppendBounded(ctx context.Context, events []domain.Event, _ int, diagnostics []domain.Diagnostic) (IngestResult, error) {
+	result, err := s.Append(ctx, events)
+	result.Diagnostics = append(result.Diagnostics, diagnostics...)
+	return result, err
 }
 func (s *memoryCaptureStore) Load(_ context.Context, projectID, traceID domain.ID) (Investigation, error) {
 	return Investigation{Trace: s.traces[traceID], Events: s.events[traceID]}, nil

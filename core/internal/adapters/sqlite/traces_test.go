@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,67 @@ import (
 	"legacylens/core/internal/application"
 	"legacylens/core/internal/domain"
 )
+
+func TestCaptureServicePersistsSanitizationDiagnostics(t *testing.T) {
+	path := t.TempDir() + "/sanitized-capture.db"
+	ctx := context.Background()
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveProject(ctx, domain.Project{ID: "p", Name: "p", Root: t.TempDir(), CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewCaptureService(store, application.CaptureConfig{Now: func() time.Time { return time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC) }})
+	session, err := service.Start(ctx, application.CaptureRequest{ProjectID: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := []string{"url-token-secret", "cookie-secret", "exception-secret", "sql-secret"}
+	event := domain.Event{ProjectID: "p", TraceID: session.ID, ProducerID: "agent", Sequence: 1, EventID: "event-1", OccurredAt: session.StartedAt.Add(time.Second), Kind: "http.request", Metadata: map[string]string{
+		"url":       "https://example.test/orders?token=" + secrets[0],
+		"cookie":    "session=" + secrets[1],
+		"exception": "request failed: " + secrets[2],
+		"sql":       "SELECT * FROM orders WHERE id = '" + secrets[3] + "'",
+	}}
+	result, err := service.Ingest(ctx, []domain.Event{event})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Diagnostics) == 0 {
+		t.Fatal("ingest should report removed metadata")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	loaded, err := store.Load(ctx, "p", session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, diagnostic := range loaded.Diagnostics {
+		if diagnostic.Code == "capture.metadata_removed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("sanitized metadata-removal diagnostic was not persisted: %#v", loaded.Diagnostics)
+	}
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("capture or diagnostic retained sensitive value %q: %s", secret, encoded)
+		}
+	}
+}
 
 func TestTraceCapturePersistsLifecycleEventsAndDiagnostics(t *testing.T) {
 	path := t.TempDir() + "/traces.db"

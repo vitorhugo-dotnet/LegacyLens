@@ -61,10 +61,10 @@ func requireOne(result sql.Result, err error, message string) error {
 }
 
 func (s *Store) Append(ctx context.Context, events []domain.Event) (application.IngestResult, error) {
-	return s.AppendBounded(ctx, events, captureEventLimit)
+	return s.AppendBounded(ctx, events, captureEventLimit, nil)
 }
 
-func (s *Store) AppendBounded(ctx context.Context, events []domain.Event, eventLimit int) (application.IngestResult, error) {
+func (s *Store) AppendBounded(ctx context.Context, events []domain.Event, eventLimit int, diagnostics []domain.Diagnostic) (application.IngestResult, error) {
 	result := application.IngestResult{}
 	if len(events) == 0 {
 		return result, nil
@@ -96,6 +96,12 @@ func (s *Store) AppendBounded(ctx context.Context, events []domain.Event, eventL
 	if ended.Valid || incomplete != 0 {
 		return result, errors.New("capture session is closed")
 	}
+	for _, diagnostic := range diagnostics {
+		if err := insertTraceDiagnostic(ctx, tx, projectID, traceID, diagnostic); err != nil {
+			return result, err
+		}
+	}
+	result.Diagnostics = append(result.Diagnostics, diagnostics...)
 	var count int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM trace_events WHERE project_id=? AND trace_id=?`, projectID, traceID).Scan(&count); err != nil {
 		return result, err

@@ -40,7 +40,7 @@ type CaptureStore interface {
 	StartCapture(context.Context, domain.Trace, string) error
 	StopCapture(context.Context, domain.ID, domain.ID, time.Time) error
 	MarkCaptureIncomplete(context.Context, domain.ID, domain.ID, domain.Diagnostic) error
-	AppendBounded(context.Context, []domain.Event, int) (IngestResult, error)
+	AppendBounded(context.Context, []domain.Event, int, []domain.Diagnostic) (IngestResult, error)
 	TraceStore
 }
 
