@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -65,5 +66,96 @@ func TestOpenLocationRejectsOutsideProject(t *testing.T) {
 func TestRevisionMissingIsUnconfirmed(t *testing.T) {
 	if got := CompareRevision(domain.Revision{}, domain.Revision{}); got == "confirmed" {
 		t.Fatal("missing revisions must never be confirmed")
+	}
+}
+
+func TestVerifyLocationDetectsChangedContentOrReplacement(t *testing.T) {
+	for _, scenario := range []string{"content changed", "file replaced"} {
+		t.Run(scenario, func(t *testing.T) {
+			rootPath := t.TempDir()
+			if err := os.WriteFile(filepath.Join(rootPath, "Main.java"), []byte("class Original {}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			root, err := os.OpenRoot(rootPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			verified, snapshot, err := openLocationSnapshot(context.Background(), root, "Main.java")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer verified.Close()
+
+			filePath := filepath.Join(rootPath, "Main.java")
+			if scenario == "file replaced" {
+				if err := os.Rename(filePath, filepath.Join(rootPath, "old.java")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filePath, []byte("class Changed {}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyLocationSnapshot(context.Background(), root, "Main.java", snapshot); !errors.Is(err, ErrLocationChanged) {
+				t.Fatalf("verification error = %v; want ErrLocationChanged", err)
+			}
+		})
+	}
+}
+
+func TestCompareRevisionConfirmedAndMismatch(t *testing.T) {
+	indexed := domain.Revision{ID: "r1", ProjectID: "p1", Digest: "abc"}
+	if got := CompareRevision(indexed, indexed); got != "confirmed" {
+		t.Fatalf("equal complete revisions = %q; want confirmed", got)
+	}
+	deployed := indexed
+	deployed.ID = "r2"
+	if got := CompareRevision(indexed, deployed); got != "mismatch" {
+		t.Fatalf("different revision IDs = %q; want mismatch", got)
+	}
+}
+
+func TestVerifyLocationRejectsSymlinkOutsideProject(t *testing.T) {
+	rootPath := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "Outside.java")
+	if err := os.WriteFile(filepath.Join(rootPath, "Main.java"), []byte("class Original {}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("class Outside {}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	verified, snapshot, err := openLocationSnapshot(context.Background(), root, "Main.java")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verified.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(rootPath, "Main.java")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(rootPath, "Main.java")); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	if err := verifyLocationSnapshot(context.Background(), root, "Main.java", snapshot); !errors.Is(err, ErrLocationChanged) {
+		t.Fatalf("verification error = %v; want ErrLocationChanged", err)
+	}
+}
+
+func TestHashLocationFileRespectsCancellation(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "source-*.java")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := hashLocationFile(ctx, file); !errors.Is(err, context.Canceled) {
+		t.Fatalf("hash error = %v; want context.Canceled", err)
 	}
 }
