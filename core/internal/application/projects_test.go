@@ -33,6 +33,9 @@ func TestProjectServiceLoadsProjectForStatus(t *testing.T) {
 func (s projectCatalogTestStore) ListProjects(context.Context) ([]domain.Project, error) {
 	return s.projects, nil
 }
+func (s projectCatalogTestStore) PageProjects(_ context.Context, offset, limit int) (Page[domain.Project], error) {
+	return NewPage(pageSlice(s.projects, offset, limit), offset, limit, len(s.projects)), nil
+}
 
 func TestProjectServiceListsRegisteredProjects(t *testing.T) {
 	want := []domain.Project{{ID: "p1", Name: "demo", Root: `C:\source`}}

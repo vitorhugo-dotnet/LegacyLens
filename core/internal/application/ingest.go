@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"legacylens/core/internal/domain"
@@ -21,6 +22,9 @@ func (s *CaptureService) Ingest(ctx context.Context, events []domain.Event) (Ing
 	for _, event := range events {
 		if event.ProjectID == "" || event.TraceID == "" || event.ProducerID == "" || event.EventID == "" || event.Sequence == 0 {
 			return IngestResult{}, errors.New("event identity and sequence are required")
+		}
+		if strings.TrimSpace(event.Kind) == "" || event.OccurredAt.IsZero() {
+			return IngestResult{}, errors.New("event kind and occurrence time are required")
 		}
 		groups[event.TraceID] = append(groups[event.TraceID], event)
 	}

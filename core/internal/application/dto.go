@@ -1,6 +1,7 @@
 package application
 
 import (
+	"sort"
 	"time"
 
 	"legacylens/core/internal/domain"
@@ -32,6 +33,29 @@ type IndexResult struct {
 	ExcludedFiles []string            `json:"excludedFiles"`
 }
 
+type IndexResultPage struct {
+	ProjectID     domain.ID               `json:"projectId"`
+	RevisionID    domain.ID               `json:"revisionId"`
+	Artifacts     Page[domain.Artifact]   `json:"artifacts"`
+	Symbols       Page[domain.Symbol]     `json:"symbols"`
+	Relations     Page[domain.Relation]   `json:"relations"`
+	Evidence      Page[domain.Evidence]   `json:"evidence"`
+	Diagnostics   Page[domain.Diagnostic] `json:"diagnostics"`
+	ReplacedFiles Page[string]            `json:"replacedFiles"`
+	ExcludedFiles Page[string]            `json:"excludedFiles"`
+}
+
+func PageIndexResult(value IndexResult, offset, limit int) IndexResultPage {
+	return IndexResultPage{ProjectID: value.ProjectID, RevisionID: value.RevisionID,
+		Artifacts:     sortedPage(value.Artifacts, offset, limit, func(a, b domain.Artifact) bool { return a.ID < b.ID }),
+		Symbols:       sortedPage(value.Symbols, offset, limit, func(a, b domain.Symbol) bool { return a.ID < b.ID }),
+		Relations:     sortedPage(value.Relations, offset, limit, func(a, b domain.Relation) bool { return a.ID < b.ID }),
+		Evidence:      sortedPage(value.Evidence, offset, limit, func(a, b domain.Evidence) bool { return a.ID < b.ID }),
+		Diagnostics:   sortedPage(value.Diagnostics, offset, limit, func(a, b domain.Diagnostic) bool { return a.ID < b.ID }),
+		ReplacedFiles: sortedPage(value.ReplacedFiles, offset, limit, func(a, b string) bool { return a < b }),
+		ExcludedFiles: sortedPage(value.ExcludedFiles, offset, limit, func(a, b string) bool { return a < b })}
+}
+
 type AnalysisInput struct {
 	ProjectID  domain.ID         `json:"projectId"`
 	RevisionID domain.ID         `json:"revisionId"`
@@ -59,11 +83,74 @@ type SearchQuery struct {
 	Text       string    `json:"text"`
 	Kinds      []string  `json:"kinds,omitempty"`
 	Limit      int       `json:"limit,omitempty"`
+	Offset     int       `json:"offset,omitempty"`
 }
 
 type SearchResult struct {
 	Symbols []domain.Symbol `json:"symbols"`
 	Total   int             `json:"total"`
+	Offset  int             `json:"offset"`
+	Limit   int             `json:"limit"`
+	HasMore bool            `json:"hasMore"`
+}
+
+type Page[T any] struct {
+	Items   []T  `json:"items"`
+	Offset  int  `json:"offset"`
+	Limit   int  `json:"limit"`
+	Total   int  `json:"total"`
+	HasMore bool `json:"hasMore"`
+}
+
+func NewPage[T any](items []T, offset, limit, total int) Page[T] {
+	if items == nil {
+		items = []T{}
+	}
+	return Page[T]{Items: items, Offset: offset, Limit: limit, Total: total, HasMore: offset+len(items) < total}
+}
+
+type InvestigationPage struct {
+	Project     domain.Project          `json:"project"`
+	Trace       domain.Trace            `json:"trace"`
+	Events      Page[domain.Event]      `json:"events"`
+	Diagnostics Page[domain.Diagnostic] `json:"diagnostics"`
+	Symbols     Page[domain.Symbol]     `json:"symbols"`
+	Relations   Page[domain.Relation]   `json:"relations"`
+}
+
+func PageInvestigation(value Investigation, offset, limit int) InvestigationPage {
+	return InvestigationPage{
+		Project: value.Project, Trace: value.Trace,
+		Events: sortedPage(value.Events, offset, limit, func(a, b domain.Event) bool {
+			if a.ProducerID == b.ProducerID {
+				if a.Sequence == b.Sequence {
+					return a.EventID < b.EventID
+				}
+				return a.Sequence < b.Sequence
+			}
+			return a.ProducerID < b.ProducerID
+		}),
+		Diagnostics: sortedPage(value.Diagnostics, offset, limit, func(a, b domain.Diagnostic) bool { return a.ID < b.ID }),
+		Symbols:     sortedPage(value.Symbols, offset, limit, func(a, b domain.Symbol) bool { return a.ID < b.ID }),
+		Relations:   sortedPage(value.Relations, offset, limit, func(a, b domain.Relation) bool { return a.ID < b.ID }),
+	}
+}
+
+func pageSlice[T any](items []T, offset, limit int) []T {
+	if offset >= len(items) {
+		return []T{}
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end]
+}
+
+func sortedPage[T any](items []T, offset, limit int, less func(T, T) bool) Page[T] {
+	ordered := append([]T(nil), items...)
+	sort.Slice(ordered, func(i, j int) bool { return less(ordered[i], ordered[j]) })
+	return NewPage(pageSlice(ordered, offset, limit), offset, limit, len(ordered))
 }
 
 type GraphQuery struct {
@@ -76,6 +163,15 @@ type GraphQuery struct {
 type GraphResult struct {
 	Symbols   []domain.Symbol   `json:"symbols"`
 	Relations []domain.Relation `json:"relations"`
+}
+
+type GraphResultPage struct {
+	Symbols   Page[domain.Symbol]   `json:"symbols"`
+	Relations Page[domain.Relation] `json:"relations"`
+}
+
+func PageGraphResult(value GraphResult, offset, limit int) GraphResultPage {
+	return GraphResultPage{Symbols: sortedPage(value.Symbols, offset, limit, func(a, b domain.Symbol) bool { return a.ID < b.ID }), Relations: sortedPage(value.Relations, offset, limit, func(a, b domain.Relation) bool { return a.ID < b.ID })}
 }
 
 type CaptureRequest struct {

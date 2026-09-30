@@ -29,6 +29,10 @@ type ProjectCatalog interface {
 	ListProjects(context.Context) ([]domain.Project, error)
 }
 
+type PagedProjectCatalog interface {
+	PageProjects(context.Context, int, int) (Page[domain.Project], error)
+}
+
 // ArtifactSource lists and reads only files approved by a project's path policy.
 type ArtifactSource interface {
 	List(context.Context, domain.Project, []string) ([]domain.Artifact, error)

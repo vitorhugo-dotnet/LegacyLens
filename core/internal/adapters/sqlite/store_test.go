@@ -83,3 +83,40 @@ func TestListProjectsReturnsRegisteredProjectsInStableOrder(t *testing.T) {
 		t.Fatalf("ListProjects() did not preserve project configuration: %+v", projects[1])
 	}
 }
+
+func TestProjectAndSearchPagesExposeLaterRowsInStableOrder(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	for _, project := range []domain.Project{{ID: "p", Name: "project", Root: t.TempDir(), CreatedAt: time.Now().UTC()}, {ID: "p2", Name: "beta", Root: "/beta"}, {ID: "p3", Name: "zeta", Root: "/zeta"}} {
+		if err := store.SaveProject(ctx, project); err != nil {
+			t.Fatal(err)
+		}
+	}
+	index := application.IndexResult{ProjectID: "p", RevisionID: "r", Artifacts: []domain.Artifact{{ID: "a", ProjectID: "p", RevisionID: "r", Path: "view.xhtml", Language: "xhtml", Origin: "test"}}}
+	for _, id := range []domain.ID{"s3", "s1", "s2"} {
+		index.Symbols = append(index.Symbols, domain.Symbol{ID: id, ProjectID: "p", RevisionID: "r", ArtifactID: "a", Path: "view.xhtml", QualifiedName: "save"})
+	}
+	if err := store.CommitIndex(ctx, index); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.PageProjects(ctx, 1, 1)
+	if err != nil || page.Total != 3 || len(page.Items) != 1 || page.Items[0].ID != "p" || page.Offset != 1 || !page.HasMore {
+		t.Fatalf("PageProjects() = %+v, %v", page, err)
+	}
+	lastProject, err := store.PageProjects(ctx, 2, 1)
+	if err != nil || len(lastProject.Items) != 1 || lastProject.Items[0].ID != "p3" || lastProject.HasMore {
+		t.Fatalf("last project page = %+v, %v", lastProject, err)
+	}
+	query := application.SearchQuery{ProjectID: "p", RevisionID: "r", Text: "save", Limit: 1, Offset: 1}
+	got, err := store.Search(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err != nil || len(got.Symbols) != 1 || got.Symbols[0].ID != "s2" || got.Total != 3 {
+		t.Fatalf("later search page = %+v, %v", got, err)
+	}
+}

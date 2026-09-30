@@ -56,4 +56,30 @@ describe('parseEnvelope', () => {
     expect(parseEnvelope({ protocolVersion: 1, requestId: 'r1', command: 'project.register', payload: { root: 'C:/source', includes: ['**/*.java'], excludes: [] } }).command)
       .toBe('project.register');
   });
+
+  it('accepts a valid location.open payload without a trace id', () => {
+    expect(parseEnvelope({ protocolVersion: 1, requestId: 'r1', command: 'location.open', payload: {
+      projectId: 'project-1', location: { path: 'views/home.xhtml', line: 4, column: 2 },
+    } }).command).toBe('location.open');
+  });
+
+  it('rejects ingested events without a positive sequence or non-empty kind', () => {
+    const event = { projectId: 'p1', traceId: '0123456789abcdef0123456789abcdef', producerId: 'agent', sequence: 1,
+      eventId: 'event-1', kind: 'http.request', occurredAt: '2026-09-30T12:00:00Z' };
+    for (const invalid of [{ ...event, sequence: 0 }, { ...event, kind: '' }]) {
+      expect(() => parseEnvelope({ protocolVersion: 1, requestId: 'r1', command: 'trace.ingest',
+        payload: { projectId: 'p1', events: [invalid] } })).toThrowError(expect.objectContaining({ code: 'INVALID_PAYLOAD' }));
+    }
+  });
+
+  it('validates bounded offset and limit fields on paged commands', () => {
+    expect(parseEnvelope({ protocolVersion: 1, requestId: 'r1', command: 'project.list', payload: { offset: 200, limit: 200 } }).command)
+      .toBe('project.list');
+    expect(() => parseEnvelope({ protocolVersion: 1, requestId: 'r1', command: 'project.list', payload: { offset: 0, limit: 201 } }))
+      .toThrowError(expect.objectContaining({ code: 'INVALID_PAYLOAD' }));
+    expect(parseEnvelope({ protocolVersion: 1, requestId: 'r1', command: 'symbol.search', payload: { projectId: 'p1', text: 'save', offset: 400, limit: 20 } }).command)
+      .toBe('symbol.search');
+    expect(parseEnvelope({ protocolVersion: 1, requestId: 'r1', command: 'investigation.get', payload: { projectId: 'p1', traceId: '0123456789abcdef0123456789abcdef', offset: 20, limit: 20 } }).command)
+      .toBe('investigation.get');
+  });
 });

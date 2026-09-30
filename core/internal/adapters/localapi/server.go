@@ -214,11 +214,18 @@ func (s *server) execute(ctx context.Context, request envelope) (any, *apiError)
 		}
 		return result, nil
 	case "project.list":
-		var payload struct{}
+		var payload struct {
+			Offset int `json:"offset"`
+			Limit  int `json:"limit"`
+		}
 		if err := decode(&payload); err != nil || s.services.Projects == nil {
 			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Project listing payload is invalid."}
 		}
-		result, err := s.services.Projects.ListProjects(ctx)
+		offset, limit, pageErr := pageParams(payload.Offset, payload.Limit)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		result, err := s.services.Projects.ListProjectsPage(ctx, offset, limit)
 		if err != nil {
 			return failed()
 		}
@@ -239,15 +246,21 @@ func (s *server) execute(ctx context.Context, request envelope) (any, *apiError)
 		var payload struct {
 			ProjectID domain.ID `json:"projectId"`
 			Paths     []string  `json:"paths"`
+			Offset    int       `json:"offset"`
+			Limit     int       `json:"limit"`
 		}
 		if err := decode(&payload); err != nil || payload.ProjectID == "" || s.services.Indexer == nil {
 			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Indexing requires a project id."}
+		}
+		offset, limit, pageErr := pageParams(payload.Offset, payload.Limit)
+		if pageErr != nil {
+			return nil, pageErr
 		}
 		result, err := s.services.Indexer.Index(ctx, application.IndexRequest{ProjectID: payload.ProjectID, Paths: payload.Paths})
 		if err != nil {
 			return failed()
 		}
-		return result, nil
+		return application.PageIndexResult(result, offset, limit), nil
 	case "symbol.search":
 		var payload struct {
 			ProjectID  domain.ID `json:"projectId"`
@@ -255,17 +268,16 @@ func (s *server) execute(ctx context.Context, request envelope) (any, *apiError)
 			Text       string    `json:"text"`
 			Kinds      []string  `json:"kinds"`
 			Limit      int       `json:"limit"`
+			Offset     int       `json:"offset"`
 		}
 		if err := decode(&payload); err != nil || payload.ProjectID == "" || payload.Text == "" || s.services.Indexer == nil {
 			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Symbol search requires a project id and text."}
 		}
-		if payload.Limit == 0 {
-			payload.Limit = maxPageSize
+		offset, limit, pageErr := pageParams(payload.Offset, payload.Limit)
+		if pageErr != nil {
+			return nil, pageErr
 		}
-		if payload.Limit < 1 || payload.Limit > maxPageSize {
-			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Page size must be from 1 to 200."}
-		}
-		result, err := s.services.Indexer.Search(ctx, application.SearchQuery{ProjectID: payload.ProjectID, RevisionID: payload.RevisionID, Text: payload.Text, Kinds: payload.Kinds, Limit: payload.Limit})
+		result, err := s.services.Indexer.Search(ctx, application.SearchQuery{ProjectID: payload.ProjectID, RevisionID: payload.RevisionID, Text: payload.Text, Kinds: payload.Kinds, Limit: limit, Offset: offset})
 		if err != nil {
 			return failed()
 		}
@@ -276,6 +288,8 @@ func (s *server) execute(ctx context.Context, request envelope) (any, *apiError)
 			RevisionID domain.ID   `json:"revisionId"`
 			SymbolIDs  []domain.ID `json:"symbolIds"`
 			Depth      *int        `json:"depth"`
+			Offset     int         `json:"offset"`
+			Limit      int         `json:"limit"`
 		}
 		if err := decode(&payload); err != nil || payload.ProjectID == "" || s.services.Indexer == nil {
 			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Graph query requires a project id."}
@@ -283,11 +297,15 @@ func (s *server) execute(ctx context.Context, request envelope) (any, *apiError)
 		if payload.Depth == nil {
 			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Graph query requires a depth."}
 		}
+		offset, limit, pageErr := pageParams(payload.Offset, payload.Limit)
+		if pageErr != nil {
+			return nil, pageErr
+		}
 		result, err := s.services.Indexer.Explore(ctx, application.GraphQuery{ProjectID: payload.ProjectID, RevisionID: payload.RevisionID, SymbolIDs: payload.SymbolIDs, Depth: *payload.Depth})
 		if err != nil {
 			return failed()
 		}
-		return result, nil
+		return application.PageGraphResult(result, offset, limit), nil
 	case "capture.start":
 		var payload struct {
 			ProjectID domain.ID `json:"projectId"`
@@ -322,8 +340,8 @@ func (s *server) execute(ctx context.Context, request envelope) (any, *apiError)
 			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Event batch is invalid."}
 		}
 		for _, event := range payload.Events {
-			if event.ProjectID != payload.ProjectID || !validTraceID(event.TraceID) {
-				return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Event batch project does not match."}
+			if event.ProjectID != payload.ProjectID || !validTraceID(event.TraceID) || event.ProducerID == "" || event.EventID == "" || event.Sequence == 0 || strings.TrimSpace(event.Kind) == "" || event.OccurredAt.IsZero() {
+				return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Event batch contains an invalid event."}
 			}
 		}
 		result, err := s.services.Captures.Ingest(ctx, payload.Events)
@@ -335,15 +353,21 @@ func (s *server) execute(ctx context.Context, request envelope) (any, *apiError)
 		var payload struct {
 			ProjectID domain.ID `json:"projectId"`
 			TraceID   domain.ID `json:"traceId"`
+			Offset    int       `json:"offset"`
+			Limit     int       `json:"limit"`
 		}
 		if err := decode(&payload); err != nil || payload.ProjectID == "" || !validTraceID(payload.TraceID) || s.services.Captures == nil {
 			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Investigation requires project and trace ids."}
 		}
-		result, err := s.services.Captures.Investigation(ctx, payload.ProjectID, payload.TraceID)
+		offset, limit, pageErr := pageParams(payload.Offset, payload.Limit)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		investigation, err := s.services.Captures.Investigation(ctx, payload.ProjectID, payload.TraceID)
 		if err != nil {
 			return failed()
 		}
-		return result, nil
+		return application.PageInvestigation(investigation, offset, limit), nil
 	case "location.open":
 		var payload struct {
 			ProjectID domain.ID       `json:"projectId"`
@@ -362,6 +386,16 @@ func (s *server) execute(ctx context.Context, request envelope) (any, *apiError)
 	default:
 		return unsupported()
 	}
+}
+
+func pageParams(offset, limit int) (int, int, *apiError) {
+	if offset < 0 || offset > 1_000_000_000 || limit < 0 || limit > maxPageSize {
+		return 0, 0, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Page offset or size is outside the supported range."}
+	}
+	if limit == 0 {
+		limit = maxPageSize
+	}
+	return offset, limit, nil
 }
 
 func (s *server) allowedOrigin(origin string) bool {

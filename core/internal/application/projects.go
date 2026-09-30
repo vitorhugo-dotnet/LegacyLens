@@ -57,6 +57,20 @@ func (s *ProjectService) ListProjects(ctx context.Context) ([]domain.Project, er
 	return catalog.ListProjects(ctx)
 }
 
+func (s *ProjectService) ListProjectsPage(ctx context.Context, offset, limit int) (Page[domain.Project], error) {
+	if s == nil || s.store == nil {
+		return Page[domain.Project]{}, errors.New("project store is required")
+	}
+	if offset < 0 || offset > 1_000_000_000 || limit < 1 || limit > 200 {
+		return Page[domain.Project]{}, errors.New("project page is outside the supported range")
+	}
+	catalog, ok := s.store.(PagedProjectCatalog)
+	if !ok {
+		return Page[domain.Project]{}, errors.New("project pagination is unavailable")
+	}
+	return catalog.PageProjects(ctx, offset, limit)
+}
+
 func (s *ProjectService) GetProject(ctx context.Context, id domain.ID) (domain.Project, error) {
 	if s == nil || s.store == nil {
 		return domain.Project{}, errors.New("project store is required")

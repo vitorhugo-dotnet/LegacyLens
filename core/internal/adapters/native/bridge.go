@@ -64,14 +64,20 @@ func (b Bridge) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 		}
 		responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, int64(MaxFrameSize)+1))
 		closeErr := response.Body.Close()
-		if readErr != nil || closeErr != nil || len(responseBody) > int(MaxFrameSize) {
+		if readErr != nil || closeErr != nil {
 			return errors.New("local core response is invalid")
 		}
 		var result Envelope
-		decoder := json.NewDecoder(bytes.NewReader(responseBody))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&result); err != nil {
-			return errors.New("local core response is invalid")
+		if len(responseBody) > int(MaxFrameSize) {
+			result = Envelope{ProtocolVersion: 1, RequestID: request.RequestID, Error: &ProtocolError{
+				Code: "RESULT_TOO_LARGE", Message: "The response exceeds the native message limit; request a smaller page.", DiagnosticIDs: []string{},
+			}}
+		} else {
+			decoder := json.NewDecoder(bytes.NewReader(responseBody))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&result); err != nil || decoder.Decode(new(any)) != io.EOF {
+				return errors.New("local core response is invalid")
+			}
 		}
 		if err := WriteFrame(out, result); err != nil {
 			return err

@@ -86,10 +86,22 @@ func (i *Indexer) Search(ctx context.Context, query SearchQuery) (SearchResult, 
 	if _, err := i.projects.LoadProject(ctx, query.ProjectID); err != nil {
 		return SearchResult{}, err
 	}
+	if query.Offset < 0 || query.Offset > 1_000_000_000 {
+		return SearchResult{}, errors.New("search offset is outside the supported range")
+	}
 	if query.Limit <= 0 || query.Limit > 200 {
 		query.Limit = 200
 	}
-	return i.store.Search(ctx, query)
+	result, err := i.store.Search(ctx, query)
+	if err != nil {
+		return SearchResult{}, err
+	}
+	result.Offset, result.Limit = query.Offset, query.Limit
+	result.HasMore = query.Offset+len(result.Symbols) < result.Total
+	if result.Symbols == nil {
+		result.Symbols = []domain.Symbol{}
+	}
+	return result, nil
 }
 
 func (i *Indexer) Explore(ctx context.Context, query GraphQuery) (GraphResult, error) {

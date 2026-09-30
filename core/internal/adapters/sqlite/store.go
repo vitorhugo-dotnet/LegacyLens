@@ -144,6 +144,44 @@ func (s *Store) ListProjects(ctx context.Context) ([]domain.Project, error) {
 	return projects, rows.Err()
 }
 
+func (s *Store) PageProjects(ctx context.Context, offset, limit int) (application.Page[domain.Project], error) {
+	if offset < 0 || offset > 1_000_000_000 || limit < 1 || limit > 200 {
+		return application.Page[domain.Project]{}, errors.New("project page is outside the supported range")
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM projects`).Scan(&total); err != nil {
+		return application.Page[domain.Project]{}, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,root,includes_json,excludes_json,created_at FROM projects ORDER BY name,id LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return application.Page[domain.Project]{}, err
+	}
+	defer rows.Close()
+	projects := make([]domain.Project, 0, limit)
+	for rows.Next() {
+		var project domain.Project
+		var includes, excludes, created string
+		if err := rows.Scan(&project.ID, &project.Name, &project.Root, &includes, &excludes, &created); err != nil {
+			return application.Page[domain.Project]{}, err
+		}
+		if err := json.Unmarshal([]byte(includes), &project.Includes); err != nil {
+			return application.Page[domain.Project]{}, err
+		}
+		if err := json.Unmarshal([]byte(excludes), &project.Excludes); err != nil {
+			return application.Page[domain.Project]{}, err
+		}
+		project.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
+		if err != nil {
+			return application.Page[domain.Project]{}, err
+		}
+		projects = append(projects, project)
+	}
+	if err := rows.Err(); err != nil {
+		return application.Page[domain.Project]{}, err
+	}
+	return application.NewPage(projects, offset, limit, total), nil
+}
+
 func (s *Store) CommitIndex(ctx context.Context, result application.IndexResult) error {
 	if result.ProjectID == "" || result.RevisionID == "" {
 		return errors.New("project and revision ids are required")
@@ -224,13 +262,13 @@ func (s *Store) Search(ctx context.Context, query application.SearchQuery) (appl
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM symbols WHERE `+where, args...).Scan(&total); err != nil {
 		return application.SearchResult{}, err
 	}
-	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, `SELECT value_json FROM symbols WHERE `+where+` LIMIT ?`, args...)
+	args = append(args, limit, query.Offset)
+	rows, err := s.db.QueryContext(ctx, `SELECT value_json FROM symbols WHERE `+where+` ORDER BY name,id LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return application.SearchResult{}, err
 	}
 	defer rows.Close()
-	result := application.SearchResult{}
+	result := application.SearchResult{Offset: query.Offset, Limit: limit}
 	for rows.Next() {
 		var encoded string
 		if err := rows.Scan(&encoded); err != nil {
@@ -243,6 +281,7 @@ func (s *Store) Search(ctx context.Context, query application.SearchQuery) (appl
 		result.Symbols = append(result.Symbols, symbol)
 	}
 	result.Total = total
+	result.HasMore = query.Offset+len(result.Symbols) < total
 	return result, rows.Err()
 }
 

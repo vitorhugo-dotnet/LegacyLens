@@ -113,26 +113,39 @@ export interface Diagnostic {
   createdAt: string;
 }
 
+export interface Page<T> {
+  items: T[];
+  offset: number;
+  limit: number;
+  total: number;
+  hasMore: boolean;
+}
+
+export type ProjectListResult = Page<Project>;
+
 export interface IndexResult {
   projectId: ID;
   revisionId: ID;
-  artifacts: Artifact[] | null;
-  symbols: Symbol[] | null;
-  relations: Relation[] | null;
-  evidence: Evidence[] | null;
-  diagnostics: Diagnostic[] | null;
-  replacedFiles: string[] | null;
-  excludedFiles: string[] | null;
+  artifacts: Page<Artifact>;
+  symbols: Page<Symbol>;
+  relations: Page<Relation>;
+  evidence: Page<Evidence>;
+  diagnostics: Page<Diagnostic>;
+  replacedFiles: Page<string>;
+  excludedFiles: Page<string>;
 }
 
 export interface SearchResult {
-  symbols: Symbol[] | null;
+  symbols: Symbol[];
   total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
 }
 
 export interface GraphResult {
-  symbols: Symbol[] | null;
-  relations: Relation[] | null;
+  symbols: Page<Symbol>;
+  relations: Page<Relation>;
 }
 
 export interface CaptureSession {
@@ -151,10 +164,10 @@ export interface IngestResult {
 export interface Investigation {
   project: Project;
   trace: Trace;
-  events: Event[] | null;
-  diagnostics: Diagnostic[] | null;
-  symbols: Symbol[] | null;
-  relations: Relation[] | null;
+  events: Page<Event>;
+  diagnostics: Page<Diagnostic>;
+  symbols: Page<Symbol>;
+  relations: Page<Relation>;
 }
 
 export interface OpenResult {
@@ -230,8 +243,8 @@ function isEvent(value: unknown): value is Event {
   return isRecord(value) && !Object.keys(value).some((key) => !['projectId', 'traceId', 'producerId', 'sequence', 'eventId', 'parentEventId', 'kind', 'occurredAt', 'applicationRevision', 'javaDestination', 'metadata'].includes(key))
     && nonEmptyString(value.projectId)
     && typeof value.traceId === 'string' && /^[a-fA-F0-9]{32}$/.test(value.traceId)
-    && nonEmptyString(value.producerId) && typeof value.sequence === 'number' && Number.isInteger(value.sequence) && value.sequence >= 0
-    && nonEmptyString(value.eventId) && nonEmptyString(value.kind) && nonEmptyString(value.occurredAt) && !Number.isNaN(Date.parse(value.occurredAt))
+    && nonEmptyString(value.producerId) && typeof value.sequence === 'number' && Number.isInteger(value.sequence) && value.sequence > 0
+    && nonEmptyString(value.eventId) && typeof value.kind === 'string' && value.kind.trim().length > 0 && nonEmptyString(value.occurredAt) && !Number.isNaN(Date.parse(value.occurredAt))
     && (value.parentEventId === undefined || nonEmptyString(value.parentEventId))
     && (value.applicationRevision === undefined || nonEmptyString(value.applicationRevision))
     && (value.javaDestination === undefined || nonEmptyString(value.javaDestination))
@@ -266,7 +279,9 @@ function validatePayload(command: (typeof commands)[number], payload: Record<str
       optionalStringArray('excludes');
       break;
     case 'project.list':
-      only([]);
+      only(['offset', 'limit']);
+      if (payload.offset !== undefined && (typeof payload.offset !== 'number' || !Number.isInteger(payload.offset) || payload.offset < 0 || payload.offset > 1_000_000_000)) invalidPayload('offset must be an integer from 0 to 1000000000');
+      if (payload.limit !== undefined && (typeof payload.limit !== 'number' || !Number.isInteger(payload.limit) || payload.limit < 0 || payload.limit > 200)) invalidPayload('limit must be an integer from 0 to 200');
       break;
     case 'project.status':
     case 'location.open':
@@ -281,33 +296,44 @@ function validatePayload(command: (typeof commands)[number], payload: Record<str
     case 'explanation.preview':
     case 'explanation.generate':
       only(command === 'project.status' ? ['projectId']
-        : command === 'project.index' ? ['projectId', 'paths']
-          : command === 'symbol.search' ? ['projectId', 'revisionId', 'text', 'kinds', 'limit']
-            : command === 'graph.explore' ? ['projectId', 'revisionId', 'symbolIds', 'depth']
+        : command === 'project.index' ? ['projectId', 'paths', 'offset', 'limit']
+          : command === 'symbol.search' ? ['projectId', 'revisionId', 'text', 'kinds', 'limit', 'offset']
+            : command === 'graph.explore' ? ['projectId', 'revisionId', 'symbolIds', 'depth', 'offset', 'limit']
               : command === 'impact.query' ? ['projectId', 'revisionId', 'symbolId']
                 : command === 'capture.start' ? ['projectId', 'tabId']
                   : command === 'capture.stop' ? ['projectId', 'traceId']
                     : command === 'trace.ingest' ? ['projectId', 'events']
-                      : command === 'investigation.get' ? ['projectId', 'traceId']
+                      : command === 'investigation.get' ? ['projectId', 'traceId', 'offset', 'limit']
                         : command === 'location.open' ? ['projectId', 'location']
                           : ['projectId', 'traceId', 'question']);
       requireString('projectId');
       if (command === 'project.status') break;
+      if (command === 'location.open') {
+        const location = payload.location;
+        if (!isRecord(location) || !nonEmptyString(location.path) || !Number.isInteger(location.line) || Number(location.line) < 1
+            || !Number.isInteger(location.column) || Number(location.column) < 1) invalidPayload('location must have a path and one-based line and column');
+        break;
+      }
       if (command === 'project.index') {
         optionalStringArray('paths');
+        if (payload.offset !== undefined && (typeof payload.offset !== 'number' || !Number.isInteger(payload.offset) || payload.offset < 0 || payload.offset > 1_000_000_000)) invalidPayload('offset must be an integer from 0 to 1000000000');
+        if (payload.limit !== undefined && (typeof payload.limit !== 'number' || !Number.isInteger(payload.limit) || payload.limit < 0 || payload.limit > 200)) invalidPayload('limit must be an integer from 0 to 200');
         break;
       }
       if (command === 'symbol.search') {
         requireString('text');
         optionalString('revisionId');
         optionalStringArray('kinds');
-        if (payload.limit !== undefined && (typeof payload.limit !== 'number' || !Number.isInteger(payload.limit) || payload.limit < 1 || payload.limit > 200)) invalidPayload('limit must be an integer from 1 to 200');
+        if (payload.limit !== undefined && (typeof payload.limit !== 'number' || !Number.isInteger(payload.limit) || payload.limit < 0 || payload.limit > 200)) invalidPayload('limit must be an integer from 0 to 200');
+        if (payload.offset !== undefined && (typeof payload.offset !== 'number' || !Number.isInteger(payload.offset) || payload.offset < 0 || payload.offset > 1_000_000_000)) invalidPayload('offset must be an integer from 0 to 1000000000');
         break;
       }
       if (command === 'graph.explore') {
         if (!stringArray(payload.symbolIds) || payload.symbolIds.length === 0) invalidPayload('symbolIds must contain at least one non-empty string');
         if (typeof payload.depth !== 'number' || !Number.isInteger(payload.depth) || payload.depth < 0 || payload.depth > 16) invalidPayload('depth must be an integer from 0 to 16');
         optionalString('revisionId');
+        if (payload.offset !== undefined && (typeof payload.offset !== 'number' || !Number.isInteger(payload.offset) || payload.offset < 0 || payload.offset > 1_000_000_000)) invalidPayload('offset must be an integer from 0 to 1000000000');
+        if (payload.limit !== undefined && (typeof payload.limit !== 'number' || !Number.isInteger(payload.limit) || payload.limit < 0 || payload.limit > 200)) invalidPayload('limit must be an integer from 0 to 200');
         break;
       }
       if (command === 'impact.query') {
@@ -325,12 +351,12 @@ function validatePayload(command: (typeof commands)[number], payload: Record<str
         if (!Array.isArray(payload.events) || payload.events.length > 10_000
             || !payload.events.every((event) => isEvent(event) && event.projectId === payload.projectId)) invalidPayload('events must contain valid events for the requested project');
       } else {
-        requireTraceId('traceId');
-        if (command === 'location.open') {
-          const location = payload.location;
-          if (!isRecord(location) || !nonEmptyString(location.path) || !Number.isInteger(location.line) || Number(location.line) < 1
-              || !Number.isInteger(location.column) || Number(location.column) < 1) invalidPayload('location must have a path and one-based line and column');
+        if (command === 'investigation.get') {
+          requireTraceId('traceId');
+          if (payload.offset !== undefined && (typeof payload.offset !== 'number' || !Number.isInteger(payload.offset) || payload.offset < 0 || payload.offset > 1_000_000_000)) invalidPayload('offset must be an integer from 0 to 1000000000');
+          if (payload.limit !== undefined && (typeof payload.limit !== 'number' || !Number.isInteger(payload.limit) || payload.limit < 0 || payload.limit > 200)) invalidPayload('limit must be an integer from 0 to 200');
         } else if (command === 'explanation.preview' || command === 'explanation.generate') {
+          requireTraceId('traceId');
           requireString('question');
         }
       }

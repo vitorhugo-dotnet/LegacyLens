@@ -96,6 +96,22 @@ func TestIngestIdempotentAndOutOfOrder(t *testing.T) {
 	}
 }
 
+func TestIngestRejectsEmptyEventKindBeforePersistence(t *testing.T) {
+	store := &memoryCaptureStore{projects: map[domain.ID]domain.Project{"p": {ID: "p"}}, traces: map[domain.ID]domain.Trace{}, events: map[domain.ID][]domain.Event{}}
+	service := NewCaptureService(store, CaptureConfig{Now: func() time.Time { return time.Unix(100, 0).UTC() }})
+	session, err := service.Start(context.Background(), CaptureRequest{ProjectID: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := domain.Event{ProjectID: "p", TraceID: session.ID, ProducerID: "agent", Sequence: 1, EventID: "event-1", OccurredAt: time.Unix(101, 0)}
+	if _, err := service.Ingest(context.Background(), []domain.Event{event}); err == nil {
+		t.Fatal("Ingest accepted an event without a kind")
+	}
+	if got := len(store.events[session.ID]); got != 0 {
+		t.Fatalf("invalid event persisted: %d events", got)
+	}
+}
+
 func TestCaptureServiceLoadsInvestigationForProjectAndTrace(t *testing.T) {
 	store := &memoryCaptureStore{projects: map[domain.ID]domain.Project{"p": {ID: "p"}}, traces: map[domain.ID]domain.Trace{"t": {ID: "t", ProjectID: "p"}}, events: map[domain.ID][]domain.Event{"t": {{ProjectID: "p", TraceID: "t", EventID: "e"}}}}
 	service := NewCaptureService(store, CaptureConfig{})
