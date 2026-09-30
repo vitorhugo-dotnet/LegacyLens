@@ -280,3 +280,50 @@ func TestAPIRejectsEventMissingKindBeforeCallingCaptureService(t *testing.T) {
 		}
 	}
 }
+
+type recordingCaptureStore struct {
+	captureStoreStub
+	accepted []domain.Event
+}
+
+func (s *recordingCaptureStore) AppendBounded(_ context.Context, events []domain.Event, _ int, _ []domain.Diagnostic) (application.IngestResult, error) {
+	s.accepted = append(s.accepted, events...)
+	return application.IngestResult{Accepted: len(events)}, nil
+}
+func (s *recordingCaptureStore) Load(_ context.Context, projectID, traceID domain.ID) (application.Investigation, error) {
+	return application.Investigation{Project: domain.Project{ID: projectID}, Trace: domain.Trace{ID: traceID, ProjectID: projectID, StartedAt: time.Now().UTC()}}, nil
+}
+
+func TestEventsEndpointIngestsAndSanitizesStructuredJavaIdentity(t *testing.T) {
+	store := &recordingCaptureStore{}
+	captures := application.NewCaptureService(store, application.CaptureConfig{})
+	handler := NewServer(Services{Captures: captures}, AuthConfig{HostToken: "host-secret-token", AgentToken: "agent-secret-token"})
+	metadata := `"metadata":{"code.class":"com.example.OrderService","code.method":"loadOrder","code.descriptor":"(Ljava/lang/String;)V","code.deployment":"deployment@loader-19af","code.line_missing":"true","code.arguments":"customer-secret","code.exception":"password=secret"}`
+	event := `{"projectId":"p1","traceId":"0123456789abcdef0123456789abcdef","producerId":"java-agent","sequence":1,"eventId":"e1","kind":"method.error","occurredAt":"2026-09-30T12:00:00Z",` + metadata + `}`
+	diagnostic := `{"projectId":"p1","traceId":"0123456789abcdef0123456789abcdef","producerId":"java-agent","sequence":2,"eventId":"e2","kind":"agent.loss","occurredAt":"2026-09-30T12:00:01Z","metadata":{"agent.dropped_count":"1","code.exception":"password=secret"}}`
+	body := `{"protocolVersion":1,"requestId":"r1","command":"trace.ingest","payload":{"projectId":"p1","events":[` + event + `,` + diagnostic + `]}}`
+	response := apiRequest(handler, "/v1/events", "agent-secret-token", "", body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("event ingest response=%d %s", response.Code, response.Body)
+	}
+	if len(store.accepted) != 2 {
+		t.Fatalf("accepted events=%d, want 2", len(store.accepted))
+	}
+	got := store.accepted[0].Metadata
+	for key, want := range map[string]string{"code.class": "com.example.OrderService", "code.method": "loadOrder", "code.descriptor": "(Ljava/lang/String;)V", "code.deployment": "deployment@loader-19af", "code.line_missing": "true"} {
+		if got[key] != want {
+			t.Errorf("safe metadata %s=%q want %q", key, got[key], want)
+		}
+	}
+	for _, key := range []string{"code.arguments", "code.exception"} {
+		if _, ok := got[key]; ok {
+			t.Errorf("unsafe field %s persisted: %#v", key, got)
+		}
+	}
+	if store.accepted[1].Metadata["agent.dropped_count"] != "1" {
+		t.Fatalf("safe loss diagnostic did not survive ingest sanitization: %#v", store.accepted[1].Metadata)
+	}
+	if _, ok := store.accepted[1].Metadata["code.exception"]; ok {
+		t.Fatalf("loss event exception text persisted: %#v", store.accepted[1].Metadata)
+	}
+}

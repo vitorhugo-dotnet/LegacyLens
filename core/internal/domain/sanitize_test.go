@@ -40,3 +40,35 @@ func TestSanitizeMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestSanitizeMetadataKeepsStructuredJavaMethodIdentity(t *testing.T) {
+	input := map[string]string{
+		"code.class":        "com.example.OrderService",
+		"code.method":       "loadOrder",
+		"code.descriptor":   "(Ljava/lang/String;)V",
+		"code.deployment":   "deployment@loader-19af",
+		"code.line_missing": "true",
+		"code.arguments":    "customer-secret",
+		"code.return":       "secret-value",
+		"code.exception":    "password=secret",
+		"code.source":       "C:/private/project/OrderService.java",
+	}
+	clean, diagnostics := SanitizeMetadata(input)
+	for key, value := range input {
+		if strings.HasPrefix(key, "code.") && key != "code.arguments" && key != "code.return" && key != "code.exception" && key != "code.source" && clean[key] != value {
+			t.Fatalf("safe structured identity %q was lost: %#v", key, clean)
+		}
+	}
+	for _, key := range []string{"code.arguments", "code.return", "code.exception", "code.source"} {
+		if _, ok := clean[key]; ok {
+			t.Fatalf("sensitive/unapproved identity field %q retained: %#v", key, clean)
+		}
+	}
+	if len(diagnostics) == 0 {
+		t.Fatal("removed fields must emit a sanitization diagnostic")
+	}
+	line, _ := SanitizeMetadata(map[string]string{"code.class": "com.example.OrderService", "code.method": "loadOrder", "code.descriptor": "()V", "code.deployment": "deployment@loader-19af", "code.line": "42"})
+	if line["code.line"] != "42" {
+		t.Fatalf("valid bytecode debug line was lost: %#v", line)
+	}
+}
