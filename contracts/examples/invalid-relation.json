@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "requestId": "request-2",
+  "command": "graph.explore",
+  "payload": {
+    "relations": [{
+      "id": "relation-2",
+      "fromId": "symbol-1",
+      "kind": "calls",
+      "evidenceIds": [],
+      "resolution": "unresolved",
+      "layer": "static"
+    }]
+  }
+}

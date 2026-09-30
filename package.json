@@ -1,0 +1,13 @@
+{
+  "name": "legacylens",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "tests/e2e"
+  ],
+  "engines": {
+    "node": "22.15.0",
+    "npm": "10.9.2"
+  }
+}

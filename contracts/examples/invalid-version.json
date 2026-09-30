@@ -1,0 +1,6 @@
+{
+  "protocolVersion": 2,
+  "requestId": "request-3",
+  "command": "graph.explore",
+  "payload": {}
+}
