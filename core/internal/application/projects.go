@@ -45,3 +45,31 @@ func (s *ProjectService) RegisterProject(ctx context.Context, config ProjectConf
 	}
 	return project, nil
 }
+
+func (s *ProjectService) ListProjects(ctx context.Context) ([]domain.Project, error) {
+	if s == nil || s.store == nil {
+		return nil, errors.New("project store is required")
+	}
+	catalog, ok := s.store.(ProjectCatalog)
+	if !ok {
+		return nil, errors.New("project listing is unavailable")
+	}
+	return catalog.ListProjects(ctx)
+}
+
+func (s *ProjectService) GetProject(ctx context.Context, id domain.ID) (domain.Project, error) {
+	if s == nil || s.store == nil {
+		return domain.Project{}, errors.New("project store is required")
+	}
+	if id == "" {
+		return domain.Project{}, errors.New("project id is required")
+	}
+	project, err := s.store.LoadProject(ctx, id)
+	if err != nil {
+		return domain.Project{}, err
+	}
+	if project.ID != id {
+		return domain.Project{}, errors.New("registered project identity does not match")
+	}
+	return project, nil
+}

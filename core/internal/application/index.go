@@ -76,6 +76,38 @@ func (i *Indexer) Index(ctx context.Context, request IndexRequest) (IndexResult,
 	return result, nil
 }
 
+func (i *Indexer) Search(ctx context.Context, query SearchQuery) (SearchResult, error) {
+	if i == nil || i.store == nil || i.projects == nil {
+		return SearchResult{}, errors.New("indexer dependencies are required")
+	}
+	if query.ProjectID == "" {
+		return SearchResult{}, errors.New("project id is required")
+	}
+	if _, err := i.projects.LoadProject(ctx, query.ProjectID); err != nil {
+		return SearchResult{}, err
+	}
+	if query.Limit <= 0 || query.Limit > 200 {
+		query.Limit = 200
+	}
+	return i.store.Search(ctx, query)
+}
+
+func (i *Indexer) Explore(ctx context.Context, query GraphQuery) (GraphResult, error) {
+	if i == nil || i.store == nil || i.projects == nil {
+		return GraphResult{}, errors.New("indexer dependencies are required")
+	}
+	if query.ProjectID == "" || len(query.SymbolIDs) == 0 {
+		return GraphResult{}, errors.New("project and symbol ids are required")
+	}
+	if _, err := i.projects.LoadProject(ctx, query.ProjectID); err != nil {
+		return GraphResult{}, err
+	}
+	if query.Depth < 0 || query.Depth > 16 {
+		return GraphResult{}, errors.New("graph depth is outside the supported range")
+	}
+	return i.store.Explore(ctx, query)
+}
+
 func stableID(parts ...string) domain.ID {
 	h := sha256.New()
 	for _, part := range parts {

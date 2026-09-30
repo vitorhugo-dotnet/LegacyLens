@@ -116,6 +116,34 @@ func (s *Store) LoadProject(ctx context.Context, id domain.ID) (domain.Project, 
 	return project, err
 }
 
+func (s *Store) ListProjects(ctx context.Context) ([]domain.Project, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,root,includes_json,excludes_json,created_at FROM projects ORDER BY name,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var projects []domain.Project
+	for rows.Next() {
+		var project domain.Project
+		var includes, excludes, created string
+		if err := rows.Scan(&project.ID, &project.Name, &project.Root, &includes, &excludes, &created); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(includes), &project.Includes); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(excludes), &project.Excludes); err != nil {
+			return nil, err
+		}
+		project.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
+		if err != nil {
+			return nil, err
+		}
+		projects = append(projects, project)
+	}
+	return projects, rows.Err()
+}
+
 func (s *Store) CommitIndex(ctx context.Context, result application.IndexResult) error {
 	if result.ProjectID == "" || result.RevisionID == "" {
 		return errors.New("project and revision ids are required")

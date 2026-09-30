@@ -7,119 +7,119 @@ import (
 )
 
 type ProjectConfig struct {
-	ProjectID domain.ID
-	Root      string
-	Name      string
-	Includes  []string
-	Excludes  []string
+	ProjectID domain.ID `json:"projectId,omitempty"`
+	Root      string    `json:"root"`
+	Name      string    `json:"name,omitempty"`
+	Includes  []string  `json:"includes,omitempty"`
+	Excludes  []string  `json:"excludes,omitempty"`
 }
 
 type IndexRequest struct {
-	ProjectID domain.ID
-	Root      string
-	Paths     []string
+	ProjectID domain.ID `json:"projectId"`
+	Root      string    `json:"root,omitempty"`
+	Paths     []string  `json:"paths,omitempty"`
 }
 
 type IndexResult struct {
-	ProjectID     domain.ID
-	RevisionID    domain.ID
-	Artifacts     []domain.Artifact
-	Symbols       []domain.Symbol
-	Relations     []domain.Relation
-	Evidence      []domain.Evidence
-	Diagnostics   []domain.Diagnostic
-	ReplacedFiles []string
-	ExcludedFiles []string
+	ProjectID     domain.ID           `json:"projectId"`
+	RevisionID    domain.ID           `json:"revisionId"`
+	Artifacts     []domain.Artifact   `json:"artifacts"`
+	Symbols       []domain.Symbol     `json:"symbols"`
+	Relations     []domain.Relation   `json:"relations"`
+	Evidence      []domain.Evidence   `json:"evidence"`
+	Diagnostics   []domain.Diagnostic `json:"diagnostics"`
+	ReplacedFiles []string            `json:"replacedFiles"`
+	ExcludedFiles []string            `json:"excludedFiles"`
 }
 
 type AnalysisInput struct {
-	ProjectID  domain.ID
-	RevisionID domain.ID
-	Root       string
-	Artifacts  []domain.Artifact
-	Sources    map[string][]byte
+	ProjectID  domain.ID         `json:"projectId"`
+	RevisionID domain.ID         `json:"revisionId"`
+	Root       string            `json:"root"`
+	Artifacts  []domain.Artifact `json:"artifacts"`
+	Sources    map[string][]byte `json:"-"`
 }
 
 type AnalysisResult struct {
-	Symbols     []domain.Symbol
-	Relations   []domain.Relation
-	Evidence    []domain.Evidence
-	Diagnostics []domain.Diagnostic
+	Symbols     []domain.Symbol     `json:"symbols"`
+	Relations   []domain.Relation   `json:"relations"`
+	Evidence    []domain.Evidence   `json:"evidence"`
+	Diagnostics []domain.Diagnostic `json:"diagnostics"`
 }
 
 type Capability struct {
-	Name        string
-	Supported   bool
-	Description string
+	Name        string `json:"name"`
+	Supported   bool   `json:"supported"`
+	Description string `json:"description"`
 }
 
 type SearchQuery struct {
-	ProjectID  domain.ID
-	RevisionID domain.ID
-	Text       string
-	Kinds      []string
-	Limit      int
+	ProjectID  domain.ID `json:"projectId"`
+	RevisionID domain.ID `json:"revisionId,omitempty"`
+	Text       string    `json:"text"`
+	Kinds      []string  `json:"kinds,omitempty"`
+	Limit      int       `json:"limit,omitempty"`
 }
 
 type SearchResult struct {
-	Symbols []domain.Symbol
-	Total   int
+	Symbols []domain.Symbol `json:"symbols"`
+	Total   int             `json:"total"`
 }
 
 type GraphQuery struct {
-	ProjectID  domain.ID
-	RevisionID domain.ID
-	SymbolIDs  []domain.ID
-	Depth      int
+	ProjectID  domain.ID   `json:"projectId"`
+	RevisionID domain.ID   `json:"revisionId,omitempty"`
+	SymbolIDs  []domain.ID `json:"symbolIds"`
+	Depth      int         `json:"depth"`
 }
 
 type GraphResult struct {
-	Symbols   []domain.Symbol
-	Relations []domain.Relation
+	Symbols   []domain.Symbol   `json:"symbols"`
+	Relations []domain.Relation `json:"relations"`
 }
 
 type CaptureRequest struct {
-	ProjectID domain.ID
-	TabID     string
-	StartedAt time.Time
+	ProjectID domain.ID `json:"projectId"`
+	TabID     string    `json:"tabId,omitempty"`
+	StartedAt time.Time `json:"startedAt,omitempty"`
 }
 
 type CaptureSession struct {
-	ID        domain.ID
-	ProjectID domain.ID
-	StartedAt time.Time
-	ExpiresAt time.Time
+	ID        domain.ID `json:"id"`
+	ProjectID domain.ID `json:"projectId"`
+	StartedAt time.Time `json:"startedAt"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 
 type IngestResult struct {
-	Accepted    int
-	Duplicate   int
-	Diagnostics []domain.Diagnostic
+	Accepted    int                 `json:"accepted"`
+	Duplicate   int                 `json:"duplicate"`
+	Diagnostics []domain.Diagnostic `json:"diagnostics"`
 }
 
 type Investigation struct {
-	Project     domain.Project
-	Trace       domain.Trace
-	Events      []domain.Event
-	Diagnostics []domain.Diagnostic
-	Symbols     []domain.Symbol
-	Relations   []domain.Relation
+	Project     domain.Project      `json:"project"`
+	Trace       domain.Trace        `json:"trace"`
+	Events      []domain.Event      `json:"events"`
+	Diagnostics []domain.Diagnostic `json:"diagnostics"`
+	Symbols     []domain.Symbol     `json:"symbols"`
+	Relations   []domain.Relation   `json:"relations"`
 }
 
 type OpenResult struct {
-	Opened  bool
-	Message string
-	File    string
-	Line    int
+	Opened  bool   `json:"opened"`
+	Message string `json:"message"`
+	File    string `json:"file,omitempty"`
+	Line    int    `json:"line,omitempty"`
 }
 
 type ExplanationRequest struct {
-	ProjectID domain.ID
-	TraceID   domain.ID
-	Question  string
+	ProjectID domain.ID `json:"projectId"`
+	TraceID   domain.ID `json:"traceId"`
+	Question  string    `json:"question"`
 }
 
 type ExplanationResult struct {
-	Text        string
-	EvidenceIDs []domain.ID
+	Text        string      `json:"text"`
+	EvidenceIDs []domain.ID `json:"evidenceIds"`
 }

@@ -55,3 +55,31 @@ func TestCommitIndexRollsBackOnFailure(t *testing.T) {
 		t.Fatalf("failed revision was partially committed: count=%d", count)
 	}
 }
+
+func TestListProjectsReturnsRegisteredProjectsInStableOrder(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	created := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	for _, project := range []domain.Project{
+		{ID: "p2", Name: "zeta", Root: `C:\zeta`, Includes: []string{"**/*.java"}, Excludes: []string{"target/**"}, CreatedAt: created},
+		{ID: "p1", Name: "alpha", Root: `C:\alpha`, CreatedAt: created},
+	} {
+		if err := store.SaveProject(ctx, project); err != nil {
+			t.Fatal(err)
+		}
+	}
+	projects, err := store.ListProjects(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 2 || projects[0].ID != "p1" || projects[1].ID != "p2" {
+		t.Fatalf("ListProjects() order = %+v", projects)
+	}
+	if len(projects[1].Includes) != 1 || projects[1].Includes[0] != "**/*.java" || len(projects[1].Excludes) != 1 || projects[1].CreatedAt != created {
+		t.Fatalf("ListProjects() did not preserve project configuration: %+v", projects[1])
+	}
+}

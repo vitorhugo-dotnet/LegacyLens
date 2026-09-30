@@ -24,6 +24,11 @@ type ProjectStore interface {
 	LoadProject(context.Context, domain.ID) (domain.Project, error)
 }
 
+// ProjectCatalog adds discovery without requiring every ProjectStore consumer to implement it.
+type ProjectCatalog interface {
+	ListProjects(context.Context) ([]domain.Project, error)
+}
+
 // ArtifactSource lists and reads only files approved by a project's path policy.
 type ArtifactSource interface {
 	List(context.Context, domain.Project, []string) ([]domain.Artifact, error)

@@ -18,7 +18,10 @@
       "required": ["id", "name", "root", "createdAt"],
       "properties": {
         "id": { "$ref": "#/$defs/id" }, "name": { "type": "string" },
-        "root": { "type": "string" }, "createdAt": { "type": "string", "format": "date-time" }
+        "root": { "type": "string" },
+        "includes": { "type": ["array", "null"], "items": { "type": "string" } },
+        "excludes": { "type": ["array", "null"], "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" }
       }
     },
     "revision": {
@@ -31,11 +34,12 @@
     },
     "artifact": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "projectId", "revisionId", "path", "language", "origin"],
+      "required": ["id", "projectId", "revisionId", "path", "language", "origin", "contentHash"],
       "properties": {
         "id": { "$ref": "#/$defs/id" }, "projectId": { "$ref": "#/$defs/id" },
         "revisionId": { "$ref": "#/$defs/id" }, "path": { "type": "string", "minLength": 1 },
-        "language": { "type": "string", "minLength": 1 }, "origin": { "type": "string", "minLength": 1 }
+        "language": { "type": "string", "minLength": 1 }, "origin": { "type": "string", "minLength": 1 },
+        "contentHash": { "type": "string" }
       }
     },
     "symbol": {
@@ -106,7 +110,8 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" }, "projectId": { "$ref": "#/$defs/id" },
         "startedAt": { "type": "string", "format": "date-time" },
-        "endedAt": { "type": "string", "format": "date-time" }
+        "endedAt": { "type": "string", "format": "date-time" },
+        "incomplete": { "type": "boolean" }
       }
     },
     "diagnostic": {

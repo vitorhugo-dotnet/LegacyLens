@@ -96,6 +96,15 @@ func TestIngestIdempotentAndOutOfOrder(t *testing.T) {
 	}
 }
 
+func TestCaptureServiceLoadsInvestigationForProjectAndTrace(t *testing.T) {
+	store := &memoryCaptureStore{projects: map[domain.ID]domain.Project{"p": {ID: "p"}}, traces: map[domain.ID]domain.Trace{"t": {ID: "t", ProjectID: "p"}}, events: map[domain.ID][]domain.Event{"t": {{ProjectID: "p", TraceID: "t", EventID: "e"}}}}
+	service := NewCaptureService(store, CaptureConfig{})
+	got, err := service.Investigation(context.Background(), "p", "t")
+	if err != nil || got.Trace.ID != "t" || got.Trace.ProjectID != "p" || len(got.Events) != 1 {
+		t.Fatalf("Investigation() = %+v, %v", got, err)
+	}
+}
+
 func TestCaptureLimitMarksIncomplete(t *testing.T) {
 	store := &memoryCaptureStore{projects: map[domain.ID]domain.Project{"p": {ID: "p"}}, traces: map[domain.ID]domain.Trace{}, events: map[domain.ID][]domain.Event{}}
 	service := NewCaptureService(store, CaptureConfig{Now: func() time.Time { return time.Unix(100, 0).UTC() }})

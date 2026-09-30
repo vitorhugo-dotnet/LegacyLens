@@ -3,6 +3,9 @@
   "requestId": "request-2",
   "command": "graph.explore",
   "payload": {
+    "projectId": "project-1",
+    "symbolIds": ["symbol-1"],
+    "depth": 1,
     "relations": [{
       "id": "relation-2",
       "fromId": "symbol-1",

@@ -13,6 +13,20 @@
         "diagnosticIds": { "type": "array", "items": { "type": "string" } }
       }
     },
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "traceId": { "type": "string", "pattern": "^[a-fA-F0-9]{32}$" },
+    "projectRegisterPayload": { "type": "object", "additionalProperties": false, "required": ["root"], "properties": { "projectId": { "$ref": "#/$defs/nonEmptyString" }, "root": { "$ref": "#/$defs/nonEmptyString" }, "name": { "type": "string" }, "includes": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" } }, "excludes": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" } } } },
+    "projectStatusPayload": { "type": "object", "additionalProperties": false, "required": ["projectId"], "properties": { "projectId": { "$ref": "#/$defs/nonEmptyString" } } },
+    "projectIndexPayload": { "type": "object", "additionalProperties": false, "required": ["projectId"], "properties": { "projectId": { "$ref": "#/$defs/nonEmptyString" }, "paths": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" } } } },
+    "symbolSearchPayload": { "type": "object", "additionalProperties": false, "required": ["projectId", "text"], "properties": { "projectId": { "$ref": "#/$defs/nonEmptyString" }, "revisionId": { "$ref": "#/$defs/nonEmptyString" }, "text": { "type": "string" }, "kinds": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" } }, "limit": { "type": "integer", "minimum": 1, "maximum": 200 } } },
+    "graphExplorePayload": { "type": "object", "additionalProperties": false, "required": ["projectId", "symbolIds", "depth"], "properties": { "projectId": { "$ref": "#/$defs/nonEmptyString" }, "revisionId": { "$ref": "#/$defs/nonEmptyString" }, "symbolIds": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmptyString" } }, "depth": { "type": "integer", "minimum": 0, "maximum": 16 } } },
+    "impactQueryPayload": { "type": "object", "additionalProperties": false, "required": ["projectId", "symbolId"], "properties": { "projectId": { "$ref": "#/$defs/nonEmptyString" }, "revisionId": { "$ref": "#/$defs/nonEmptyString" }, "symbolId": { "$ref": "#/$defs/nonEmptyString" } } },
+    "captureStartPayload": { "type": "object", "additionalProperties": false, "required": ["projectId"], "properties": { "projectId": { "$ref": "#/$defs/nonEmptyString" }, "tabId": { "type": "string" } } },
+    "captureStopPayload": { "type": "object", "additionalProperties": false, "required": ["projectId", "traceId"], "properties": { "projectId": { "$ref": "#/$defs/nonEmptyString" }, "traceId": { "$ref": "#/$defs/traceId" } } },
+    "traceIngestPayload": { "type": "object", "additionalProperties": false, "required": ["projectId", "events"], "properties": { "projectId": { "$ref": "#/$defs/nonEmptyString" }, "events": { "type": "array", "maxItems": 10000, "items": { "$ref": "domain-v1.schema.json#/$defs/event" } } } },
+    "investigationPayload": { "type": "object", "additionalProperties": false, "required": ["projectId", "traceId"], "properties": { "projectId": { "$ref": "#/$defs/nonEmptyString" }, "traceId": { "$ref": "#/$defs/traceId" } } },
+    "locationOpenPayload": { "type": "object", "additionalProperties": false, "required": ["projectId", "location"], "properties": { "projectId": { "$ref": "#/$defs/nonEmptyString" }, "location": { "$ref": "domain-v1.schema.json#/$defs/location" } } },
+    "explanationPayload": { "type": "object", "additionalProperties": false, "required": ["projectId", "traceId", "question"], "properties": { "projectId": { "$ref": "#/$defs/nonEmptyString" }, "traceId": { "$ref": "#/$defs/traceId" }, "question": { "$ref": "#/$defs/nonEmptyString" } } },
     "envelope": {
       "type": "object",
       "additionalProperties": false,
@@ -21,7 +35,7 @@
         "protocolVersion": { "const": 1 },
         "requestId": { "type": "string", "minLength": 1 },
         "command": {
-          "enum": ["project.register", "project.index", "symbol.search", "graph.explore", "impact.query", "capture.start", "capture.stop", "trace.ingest", "investigation.get", "location.open", "explanation.preview", "explanation.generate"]
+          "enum": ["project.register", "project.list", "project.status", "project.index", "symbol.search", "graph.explore", "impact.query", "capture.start", "capture.stop", "trace.ingest", "investigation.get", "location.open", "explanation.preview", "explanation.generate"]
         },
         "payload": { "type": "object" }
       }
@@ -39,5 +53,20 @@
       "oneOf": [{ "required": ["result"] }, { "required": ["error"] }]
     }
   },
+  "allOf": [
+    { "if": { "required": ["command"], "properties": { "command": { "const": "project.register" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/projectRegisterPayload" } } } },
+    { "if": { "required": ["command"], "properties": { "command": { "const": "project.list" } } }, "then": { "properties": { "payload": { "type": "object", "maxProperties": 0 } } } },
+    { "if": { "required": ["command"], "properties": { "command": { "const": "project.status" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/projectStatusPayload" } } } },
+    { "if": { "required": ["command"], "properties": { "command": { "const": "project.index" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/projectIndexPayload" } } } },
+    { "if": { "required": ["command"], "properties": { "command": { "const": "symbol.search" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/symbolSearchPayload" } } } },
+    { "if": { "required": ["command"], "properties": { "command": { "const": "graph.explore" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/graphExplorePayload" } } } },
+    { "if": { "required": ["command"], "properties": { "command": { "const": "impact.query" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/impactQueryPayload" } } } },
+    { "if": { "required": ["command"], "properties": { "command": { "const": "capture.start" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/captureStartPayload" } } } },
+    { "if": { "required": ["command"], "properties": { "command": { "const": "capture.stop" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/captureStopPayload" } } } },
+    { "if": { "required": ["command"], "properties": { "command": { "const": "trace.ingest" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/traceIngestPayload" } } } },
+    { "if": { "required": ["command"], "properties": { "command": { "const": "investigation.get" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/investigationPayload" } } } },
+    { "if": { "required": ["command"], "properties": { "command": { "const": "location.open" } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/locationOpenPayload" } } } },
+    { "if": { "required": ["command"], "properties": { "command": { "enum": ["explanation.preview", "explanation.generate"] } } }, "then": { "properties": { "payload": { "$ref": "#/$defs/explanationPayload" } } } }
+  ],
   "$ref": "#/$defs/envelope"
 }

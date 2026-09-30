@@ -77,3 +77,20 @@ func (s *CaptureService) Stop(ctx context.Context, projectID, traceID domain.ID)
 	}
 	return s.store.StopCapture(ctx, projectID, traceID, s.config.Now().UTC())
 }
+
+func (s *CaptureService) Investigation(ctx context.Context, projectID, traceID domain.ID) (Investigation, error) {
+	if s == nil || s.store == nil {
+		return Investigation{}, errors.New("capture store is required")
+	}
+	if projectID == "" || traceID == "" {
+		return Investigation{}, errors.New("project and trace ids are required")
+	}
+	loaded, err := s.store.Load(ctx, projectID, traceID)
+	if err != nil {
+		return Investigation{}, err
+	}
+	if loaded.Trace.ID != traceID || loaded.Trace.ProjectID != projectID {
+		return Investigation{}, errors.New("capture session not found")
+	}
+	return loaded, nil
+}

@@ -1,7 +1,7 @@
 export const protocolVersion = 1 as const;
 
 export const commands = [
-  'project.register', 'project.index', 'symbol.search', 'graph.explore',
+  'project.register', 'project.list', 'project.status', 'project.index', 'symbol.search', 'graph.explore',
   'impact.query', 'capture.start', 'capture.stop', 'trace.ingest',
   'investigation.get', 'location.open', 'explanation.preview', 'explanation.generate',
 ] as const;
@@ -18,6 +18,8 @@ export interface Project {
   id: ID;
   name: string;
   root: string;
+  includes?: string[] | null;
+  excludes?: string[] | null;
   createdAt: string;
 }
 
@@ -35,6 +37,7 @@ export interface Artifact {
   path: string;
   language: string;
   origin: string;
+  contentHash: string;
 }
 
 export interface Symbol {
@@ -84,6 +87,7 @@ export interface Trace {
   projectId: ID;
   startedAt: string;
   endedAt?: string;
+  incomplete?: boolean;
 }
 
 export interface Event {
@@ -107,6 +111,57 @@ export interface Diagnostic {
   severity: string;
   location?: Location;
   createdAt: string;
+}
+
+export interface IndexResult {
+  projectId: ID;
+  revisionId: ID;
+  artifacts: Artifact[] | null;
+  symbols: Symbol[] | null;
+  relations: Relation[] | null;
+  evidence: Evidence[] | null;
+  diagnostics: Diagnostic[] | null;
+  replacedFiles: string[] | null;
+  excludedFiles: string[] | null;
+}
+
+export interface SearchResult {
+  symbols: Symbol[] | null;
+  total: number;
+}
+
+export interface GraphResult {
+  symbols: Symbol[] | null;
+  relations: Relation[] | null;
+}
+
+export interface CaptureSession {
+  id: ID;
+  projectId: ID;
+  startedAt: string;
+  expiresAt: string;
+}
+
+export interface IngestResult {
+  accepted: number;
+  duplicate: number;
+  diagnostics: Diagnostic[] | null;
+}
+
+export interface Investigation {
+  project: Project;
+  trace: Trace;
+  events: Event[] | null;
+  diagnostics: Diagnostic[] | null;
+  symbols: Symbol[] | null;
+  relations: Relation[] | null;
+}
+
+export interface OpenResult {
+  opened: boolean;
+  message: string;
+  file?: string;
+  line?: number;
 }
 
 export interface ProtocolErrorPayload {
@@ -147,16 +202,140 @@ function isRelation(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return typeof value.id === 'string' && value.id.length > 0
     && typeof value.fromId === 'string' && value.fromId.length > 0
-    && (value.toId === undefined || typeof value.toId === 'string')
+    && (value.toId === undefined || (typeof value.toId === 'string' && value.toId.length > 0))
     && typeof value.kind === 'string' && value.kind.length > 0
     && Array.isArray(value.evidenceIds) && value.evidenceIds.length > 0
     && value.evidenceIds.every((id) => typeof id === 'string' && id.length > 0)
     && ['resolved', 'dynamic', 'unresolved'].includes(String(value.resolution))
     && ['static', 'observed'].includes(String(value.layer))
     && (value.location === undefined || (isRecord(value.location)
-      && typeof value.location.path === 'string'
+      && typeof value.location.path === 'string' && value.location.path.length > 0
       && Number.isInteger(value.location.line) && Number(value.location.line) >= 1
       && Number.isInteger(value.location.column) && Number(value.location.column) >= 1));
+}
+
+function invalidPayload(message: string): never {
+  throw new ProtocolValidationError('INVALID_PAYLOAD', message);
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function stringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(nonEmptyString);
+}
+
+function isEvent(value: unknown): value is Event {
+  return isRecord(value) && !Object.keys(value).some((key) => !['projectId', 'traceId', 'producerId', 'sequence', 'eventId', 'parentEventId', 'kind', 'occurredAt', 'applicationRevision', 'javaDestination', 'metadata'].includes(key))
+    && nonEmptyString(value.projectId)
+    && typeof value.traceId === 'string' && /^[a-fA-F0-9]{32}$/.test(value.traceId)
+    && nonEmptyString(value.producerId) && typeof value.sequence === 'number' && Number.isInteger(value.sequence) && value.sequence >= 0
+    && nonEmptyString(value.eventId) && nonEmptyString(value.kind) && nonEmptyString(value.occurredAt) && !Number.isNaN(Date.parse(value.occurredAt))
+    && (value.parentEventId === undefined || nonEmptyString(value.parentEventId))
+    && (value.applicationRevision === undefined || nonEmptyString(value.applicationRevision))
+    && (value.javaDestination === undefined || nonEmptyString(value.javaDestination))
+    && (value.metadata === undefined || (isRecord(value.metadata)
+      && Object.values(value.metadata).every((item) => typeof item === 'string')));
+}
+
+function validatePayload(command: (typeof commands)[number], payload: Record<string, unknown>): void {
+  const only = (keys: string[]): void => {
+    if (Object.keys(payload).some((key) => !keys.includes(key))) invalidPayload('payload contains an unsupported field');
+  };
+  const requireString = (key: string): void => {
+    if (!nonEmptyString(payload[key])) invalidPayload(`${key} must be a non-empty string`);
+  };
+  const requireTraceId = (key: string): void => {
+    requireString(key);
+    if (!/^[a-fA-F0-9]{32}$/.test(payload[key] as string)) invalidPayload(`${key} must be a 32-character trace id`);
+  };
+  const optionalString = (key: string): void => {
+    if (payload[key] !== undefined && typeof payload[key] !== 'string') invalidPayload(`${key} must be a string`);
+  };
+  const optionalStringArray = (key: string): void => {
+    if (payload[key] !== undefined && !stringArray(payload[key])) invalidPayload(`${key} must be an array of non-empty strings`);
+  };
+
+  switch (command) {
+    case 'project.register':
+      only(['projectId', 'root', 'name', 'includes', 'excludes']);
+      requireString('root');
+      optionalString('name');
+      optionalStringArray('includes');
+      optionalStringArray('excludes');
+      break;
+    case 'project.list':
+      only([]);
+      break;
+    case 'project.status':
+    case 'location.open':
+    case 'project.index':
+    case 'symbol.search':
+    case 'graph.explore':
+    case 'impact.query':
+    case 'capture.start':
+    case 'capture.stop':
+    case 'trace.ingest':
+    case 'investigation.get':
+    case 'explanation.preview':
+    case 'explanation.generate':
+      only(command === 'project.status' ? ['projectId']
+        : command === 'project.index' ? ['projectId', 'paths']
+          : command === 'symbol.search' ? ['projectId', 'revisionId', 'text', 'kinds', 'limit']
+            : command === 'graph.explore' ? ['projectId', 'revisionId', 'symbolIds', 'depth']
+              : command === 'impact.query' ? ['projectId', 'revisionId', 'symbolId']
+                : command === 'capture.start' ? ['projectId', 'tabId']
+                  : command === 'capture.stop' ? ['projectId', 'traceId']
+                    : command === 'trace.ingest' ? ['projectId', 'events']
+                      : command === 'investigation.get' ? ['projectId', 'traceId']
+                        : command === 'location.open' ? ['projectId', 'location']
+                          : ['projectId', 'traceId', 'question']);
+      requireString('projectId');
+      if (command === 'project.status') break;
+      if (command === 'project.index') {
+        optionalStringArray('paths');
+        break;
+      }
+      if (command === 'symbol.search') {
+        requireString('text');
+        optionalString('revisionId');
+        optionalStringArray('kinds');
+        if (payload.limit !== undefined && (typeof payload.limit !== 'number' || !Number.isInteger(payload.limit) || payload.limit < 1 || payload.limit > 200)) invalidPayload('limit must be an integer from 1 to 200');
+        break;
+      }
+      if (command === 'graph.explore') {
+        if (!stringArray(payload.symbolIds) || payload.symbolIds.length === 0) invalidPayload('symbolIds must contain at least one non-empty string');
+        if (typeof payload.depth !== 'number' || !Number.isInteger(payload.depth) || payload.depth < 0 || payload.depth > 16) invalidPayload('depth must be an integer from 0 to 16');
+        optionalString('revisionId');
+        break;
+      }
+      if (command === 'impact.query') {
+        requireString('symbolId');
+        optionalString('revisionId');
+        break;
+      }
+      if (command === 'capture.start') {
+        optionalString('tabId');
+        break;
+      }
+      if (command === 'capture.stop') {
+        requireTraceId('traceId');
+      } else if (command === 'trace.ingest') {
+        if (!Array.isArray(payload.events) || payload.events.length > 10_000
+            || !payload.events.every((event) => isEvent(event) && event.projectId === payload.projectId)) invalidPayload('events must contain valid events for the requested project');
+      } else {
+        requireTraceId('traceId');
+        if (command === 'location.open') {
+          const location = payload.location;
+          if (!isRecord(location) || !nonEmptyString(location.path) || !Number.isInteger(location.line) || Number(location.line) < 1
+              || !Number.isInteger(location.column) || Number(location.column) < 1) invalidPayload('location must have a path and one-based line and column');
+        } else if (command === 'explanation.preview' || command === 'explanation.generate') {
+          requireString('question');
+        }
+      }
+      break;
+  }
 }
 
 export function parseEnvelope(input: unknown): Envelope {
@@ -169,8 +348,11 @@ export function parseEnvelope(input: unknown): Envelope {
   if (typeof input.requestId !== 'string' || input.requestId.length === 0) {
     throw new ProtocolValidationError('INVALID_ENVELOPE', 'Envelope requestId must be a non-empty string');
   }
-  if (typeof input.command !== 'string' || !commands.includes(input.command as (typeof commands)[number])) {
-    throw new ProtocolValidationError('INVALID_ENVELOPE', 'Envelope command is not supported');
+  if (typeof input.command !== 'string' || input.command.length === 0) {
+    throw new ProtocolValidationError('INVALID_ENVELOPE', 'Envelope command must be a non-empty string');
+  }
+  if (!commands.includes(input.command as (typeof commands)[number])) {
+    throw new ProtocolValidationError('UNSUPPORTED_COMMAND', 'Envelope command is not supported');
   }
   if (!isRecord(input.payload)) {
     throw new ProtocolValidationError('INVALID_ENVELOPE', 'Envelope payload must be a JSON object');
@@ -180,5 +362,6 @@ export function parseEnvelope(input: unknown): Envelope {
       throw new ProtocolValidationError('INVALID_RELATION', 'Each relation must have valid fields and at least one evidence ID');
     }
   }
+  validatePayload(input.command as (typeof commands)[number], input.payload);
   return input as unknown as Envelope;
 }

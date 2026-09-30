@@ -29,17 +29,38 @@ func (s sourceStub) Read(_ context.Context, _ domain.Project, artifact domain.Ar
 	return s.files[artifact.Path], nil
 }
 
-type storeStub struct{ result application.IndexResult }
+type storeStub struct {
+	result application.IndexResult
+	search application.SearchResult
+	graph  application.GraphResult
+}
 
 func (s *storeStub) CommitIndex(_ context.Context, result application.IndexResult) error {
 	s.result = result
 	return nil
 }
-func (*storeStub) Search(context.Context, application.SearchQuery) (application.SearchResult, error) {
-	return application.SearchResult{}, nil
+func (s *storeStub) Search(context.Context, application.SearchQuery) (application.SearchResult, error) {
+	return s.search, nil
 }
-func (*storeStub) Explore(context.Context, application.GraphQuery) (application.GraphResult, error) {
-	return application.GraphResult{}, nil
+func (s *storeStub) Explore(context.Context, application.GraphQuery) (application.GraphResult, error) {
+	return s.graph, nil
+}
+
+func TestIndexerExposesSearchAndGraphUseCases(t *testing.T) {
+	project := domain.Project{ID: "p1"}
+	projects := projectStoreStub{project: &project}
+	wantSearch := application.SearchResult{Total: 1, Symbols: []domain.Symbol{{ID: "symbol-1"}}}
+	wantGraph := application.GraphResult{Symbols: []domain.Symbol{{ID: "symbol-1"}}}
+	store := &storeStub{search: wantSearch, graph: wantGraph}
+	indexer := application.NewIndexer(store, projects, sourceStub{}, nil)
+	gotSearch, err := indexer.Search(context.Background(), application.SearchQuery{ProjectID: "p1", Text: "save"})
+	if err != nil || gotSearch.Total != 1 || gotSearch.Symbols[0].ID != "symbol-1" {
+		t.Fatalf("Search() = %+v, %v", gotSearch, err)
+	}
+	gotGraph, err := indexer.Explore(context.Background(), application.GraphQuery{ProjectID: "p1", SymbolIDs: []domain.ID{"symbol-1"}})
+	if err != nil || len(gotGraph.Symbols) != 1 || gotGraph.Symbols[0].ID != "symbol-1" {
+		t.Fatalf("Explore() = %+v, %v", gotGraph, err)
+	}
 }
 
 type projectStoreStub struct{ project *domain.Project }
