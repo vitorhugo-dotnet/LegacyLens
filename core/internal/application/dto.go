@@ -108,6 +108,8 @@ type Investigation struct {
 type OpenResult struct {
 	Opened  bool
 	Message string
+	File    string
+	Line    int
 }
 
 type ExplanationRequest struct {
