@@ -9,6 +9,8 @@ type Project struct {
 	ID        ID        `json:"id"`
 	Name      string    `json:"name"`
 	Root      string    `json:"root"`
+	Includes  []string  `json:"includes,omitempty"`
+	Excludes  []string  `json:"excludes,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -20,12 +22,13 @@ type Revision struct {
 }
 
 type Artifact struct {
-	ID         ID     `json:"id"`
-	ProjectID  ID     `json:"projectId"`
-	RevisionID ID     `json:"revisionId"`
-	Path       string `json:"path"`
-	Language   string `json:"language"`
-	Origin     string `json:"origin"`
+	ID          ID     `json:"id"`
+	ProjectID   ID     `json:"projectId"`
+	RevisionID  ID     `json:"revisionId"`
+	Path        string `json:"path"`
+	Language    string `json:"language"`
+	Origin      string `json:"origin"`
+	ContentHash string `json:"contentHash"`
 }
 
 type Location struct {

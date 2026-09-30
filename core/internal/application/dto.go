@@ -10,6 +10,8 @@ type ProjectConfig struct {
 	ProjectID domain.ID
 	Root      string
 	Name      string
+	Includes  []string
+	Excludes  []string
 }
 
 type IndexRequest struct {
@@ -33,7 +35,9 @@ type IndexResult struct {
 type AnalysisInput struct {
 	ProjectID  domain.ID
 	RevisionID domain.ID
+	Root       string
 	Artifacts  []domain.Artifact
+	Sources    map[string][]byte
 }
 
 type AnalysisResult struct {

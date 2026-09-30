@@ -17,6 +17,18 @@ type IndexStore interface {
 	Explore(context.Context, GraphQuery) (GraphResult, error)
 }
 
+// ProjectStore persists registered projects independently of the storage adapter.
+type ProjectStore interface {
+	SaveProject(context.Context, domain.Project) error
+	LoadProject(context.Context, domain.ID) (domain.Project, error)
+}
+
+// ArtifactSource lists and reads only files approved by a project's path policy.
+type ArtifactSource interface {
+	List(context.Context, domain.Project, []string) ([]domain.Artifact, error)
+	Read(context.Context, domain.Project, domain.Artifact) ([]byte, error)
+}
+
 type TraceStore interface {
 	Append(context.Context, []domain.Event) (IngestResult, error)
 	Load(context.Context, domain.ID, domain.ID) (Investigation, error)
