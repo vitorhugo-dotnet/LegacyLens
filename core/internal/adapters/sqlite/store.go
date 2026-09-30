@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-//go:embed migrations/001_initial.sql
+//go:embed migrations/*.sql
 var migrationFiles embed.FS
 
 type Store struct{ db *sql.DB }
@@ -48,29 +48,45 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
 		return err
 	}
-	var applied bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 1)`).Scan(&applied); err != nil {
-		return err
-	}
-	if applied {
-		return nil
-	}
-	sqlText, err := migrationFiles.ReadFile("migrations/001_initial.sql")
+	entries, err := migrationFiles.ReadDir("migrations")
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
+	for _, entry := range entries {
+		if entry.IsDir() || len(entry.Name()) < 4 {
+			continue
+		}
+		var version int
+		if _, err := fmt.Sscanf(entry.Name()[:3], "%d", &version); err != nil {
+			return fmt.Errorf("invalid migration name %q", entry.Name())
+		}
+		var applied bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?)`, version).Scan(&applied); err != nil {
+			return err
+		}
+		if applied {
+			continue
+		}
+		sqlText, err := migrationFiles.ReadFile("migrations/" + entry.Name())
+		if err != nil {
+			return err
+		}
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, string(sqlText)); err == nil {
+			_, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, version, time.Now().UTC().Format(time.RFC3339Nano))
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
 	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, string(sqlText)); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Store) SaveProject(ctx context.Context, project domain.Project) error {

@@ -92,10 +92,11 @@ type Interaction struct {
 }
 
 type Trace struct {
-	ID        ID         `json:"id"`
-	ProjectID ID         `json:"projectId"`
-	StartedAt time.Time  `json:"startedAt"`
-	EndedAt   *time.Time `json:"endedAt,omitempty"`
+	ID         ID         `json:"id"`
+	ProjectID  ID         `json:"projectId"`
+	StartedAt  time.Time  `json:"startedAt"`
+	EndedAt    *time.Time `json:"endedAt,omitempty"`
+	Incomplete bool       `json:"incomplete,omitempty"`
 }
 
 type Event struct {

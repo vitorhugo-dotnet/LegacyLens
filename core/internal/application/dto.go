@@ -98,11 +98,12 @@ type IngestResult struct {
 }
 
 type Investigation struct {
-	Project   domain.Project
-	Trace     domain.Trace
-	Events    []domain.Event
-	Symbols   []domain.Symbol
-	Relations []domain.Relation
+	Project     domain.Project
+	Trace       domain.Trace
+	Events      []domain.Event
+	Diagnostics []domain.Diagnostic
+	Symbols     []domain.Symbol
+	Relations   []domain.Relation
 }
 
 type OpenResult struct {

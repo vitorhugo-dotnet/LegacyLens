@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"time"
 
 	"legacylens/core/internal/domain"
 )
@@ -32,6 +33,15 @@ type ArtifactSource interface {
 type TraceStore interface {
 	Append(context.Context, []domain.Event) (IngestResult, error)
 	Load(context.Context, domain.ID, domain.ID) (Investigation, error)
+}
+
+type CaptureStore interface {
+	LoadProject(context.Context, domain.ID) (domain.Project, error)
+	StartCapture(context.Context, domain.Trace, string) error
+	StopCapture(context.Context, domain.ID, domain.ID, time.Time) error
+	MarkCaptureIncomplete(context.Context, domain.ID, domain.ID, domain.Diagnostic) error
+	AppendBounded(context.Context, []domain.Event, int) (IngestResult, error)
+	TraceStore
 }
 
 type Editor interface {
