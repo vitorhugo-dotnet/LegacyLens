@@ -69,12 +69,16 @@ jobs:
 
   legacy-e2e:
     name: Legacy fixture and end-to-end browser flow
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.sha }}
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
+        with:
+          go-version: 1.26.2
+          cache-dependency-path: core/go.sum
       - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
         with:
           distribution: temurin
@@ -105,6 +109,22 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.sha }}
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
+        with:
+          go-version: 1.26.2
+          cache-dependency-path: core/go.sum
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.15.0
+          cache: npm
+      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Install package dependencies
+        shell: pwsh
+        run: npm ci
       - name: Build Windows x64 package
         shell: pwsh
         run: ./scripts/package-release.ps1 -OutputDirectory artifacts -VerifiedChecks @('contracts','extension','core','java8-runtime','java8-agent-smoke','java21-runtime','java21-agent-smoke','legacy-fixture','legacy-e2e')

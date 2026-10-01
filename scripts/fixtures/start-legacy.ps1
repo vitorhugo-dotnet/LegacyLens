@@ -12,16 +12,19 @@ $lock = Get-Content -Raw (Join-Path $root 'fixtures\legacy\fixture-lock.json') |
 function Get-PinnedArchive($name, $entry) {
   $archive = Join-Path $cache ($name + '.zip')
   if (!(Test-Path -LiteralPath $archive)) { curl.exe -LfsS -o $archive $entry.url; if ($LASTEXITCODE -ne 0) { throw "Could not download $name" } }
-  if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.sha256) { throw "Checksum mismatch for $name" }
+  if (!$entry.sha256 -and !$entry.md5) { throw "No pinned checksum for $name" }
+  if ($entry.sha256 -and (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.sha256.ToLowerInvariant()) { throw "SHA-256 mismatch for $name" }
+  if ($entry.md5 -and (Get-FileHash -LiteralPath $archive -Algorithm MD5).Hash.ToLowerInvariant() -ne $entry.md5.ToLowerInvariant()) { throw "MD5 mismatch for $name" }
   $destination = Join-Path $cache $name
   if (!(Test-Path -LiteralPath $destination)) { Expand-Archive -LiteralPath $archive -DestinationPath $destination }
   return $destination
 }
 $jdkDir = Get-PinnedArchive 'jdk8' $lock.java
 $wildDir = Get-PinnedArchive 'wildfly10' $lock.wildfly
+$mysqlDir = Get-PinnedArchive 'mysql57' $lock.mysql
 $jdk = Join-Path $jdkDir 'jdk8u462-b08'
 $wildfly = Join-Path $wildDir 'wildfly-10.0.0.Final'
-if (!(Test-Path (Join-Path $jdk 'bin\java.exe')) -or !(Test-Path (Join-Path $wildfly 'bin\standalone.bat'))) { throw 'Pinned Java or WildFly archive is incomplete.' }
+if (!(Test-Path (Join-Path $jdk 'bin\java.exe')) -or !(Test-Path (Join-Path $wildfly 'bin\standalone.bat')) -or !(Test-Path (Join-Path $mysqlDir 'mysql-5.7.44-winx64\bin\mysqld.exe'))) { throw 'Pinned Java, WildFly, or MySQL archive is incomplete.' }
 $env:JAVA_HOME = $jdk
 & mvn -q -f (Join-Path $root 'fixtures\legacy\pom.xml') package
 if ($LASTEXITCODE -ne 0) { throw 'Legacy WAR build failed.' }
@@ -33,15 +36,39 @@ if ($ExtensionId) {
   & go -C (Join-Path $root 'core') build -o (Join-Path $cache 'legacylens-host.exe') ./cmd/legacylens-host
   if ($LASTEXITCODE -ne 0) { throw 'Native host build failed.' }
 }
-$containerName = 'legacylens-fixture-' + [guid]::NewGuid().ToString('N').Substring(0,12)
-$runtime = Join-Path $env:TEMP $containerName
+$fixtureId = 'legacylens-fixture-' + [guid]::NewGuid().ToString('N').Substring(0,12)
+$runtime = Join-Path $env:TEMP $fixtureId
 New-Item -ItemType Directory -Path $runtime | Out-Null
 $schema = Join-Path $root 'fixtures\legacy\sql\schema.sql'
+$mysqlHome = Join-Path $mysqlDir 'mysql-5.7.44-winx64'
+$mysqlData = Join-Path $cache 'mysql-data'
+$mysqld = Join-Path $mysqlHome 'bin\mysqld.exe'
+$mysql = Join-Path $mysqlHome 'bin\mysql.exe'
+$mysqladmin = Join-Path $mysqlHome 'bin\mysqladmin.exe'
 try {
-  $containerId = & docker run --name $containerName --rm -d -p "127.0.0.1:${MySqlPort}:3306" -e 'MYSQL_ROOT_PASSWORD=fixture-root' -v "${schema}:/docker-entrypoint-initdb.d/01-schema.sql:ro" $lock.mysql.image
-  if ($LASTEXITCODE -ne 0 -or $containerId -notmatch '^[0-9a-f]{64}$') { throw 'MySQL container start failed.' }
-  $state = @{ containerName=$containerName; containerId=$containerId; runtime=$runtime }
+  New-Item -ItemType Directory -Force -Path $mysqlData | Out-Null
+  & $mysqld --no-defaults --initialize-insecure "--basedir=$mysqlHome" "--datadir=$mysqlData" --console
+  if ($LASTEXITCODE -ne 0) { throw 'MySQL data directory initialization failed.' }
+  $mysqlArguments = @('--no-defaults',"--basedir=`"$mysqlHome`"","--datadir=`"$mysqlData`"","--port=$MySqlPort",'--bind-address=127.0.0.1','--console')
+  $mysqlProcess = Start-Process -FilePath $mysqld -ArgumentList $mysqlArguments -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $cache 'mysql-out.log') -RedirectStandardError (Join-Path $cache 'mysql-err.log')
+  $state = @{ fixtureId=$fixtureId; runtime=$runtime; mysqlPid=$mysqlProcess.Id; mysqlPath=$mysqld; mysqlData=$mysqlData; mysqlPort=$MySqlPort }
   $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
+  $mysqlConnection = @('--no-defaults','--protocol=tcp','--host=127.0.0.1',"--port=$MySqlPort",'--user=root')
+  $mysqlReady = $false
+  for ($i=0; $i -lt 90; $i++) {
+    if ($mysqlProcess.HasExited) { throw 'MySQL server exited during startup.' }
+    & $mysqladmin @mysqlConnection ping 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { $mysqlReady = $true; break }
+    Start-Sleep -Seconds 1
+  }
+  if (!$mysqlReady) { throw 'MySQL server readiness failed; inspect sanitized logs in .fixture-cache.' }
+  $rootPasswordSql = "ALTER USER 'root'@'localhost' IDENTIFIED BY 'fixture-root';"
+  & $mysql @mysqlConnection "--execute=$rootPasswordSql"
+  if ($LASTEXITCODE -ne 0) { throw 'Could not configure fixture MySQL root account.' }
+  $mysqlRootConnection = $mysqlConnection + @('--password=fixture-root')
+  $schemaSql = Get-Content -Raw -LiteralPath $schema
+  & $mysql @mysqlRootConnection "--execute=$schemaSql"
+  if ($LASTEXITCODE -ne 0) { throw 'Could not initialize fixture MySQL schema.' }
   if ($ExtensionId) {
     $manifestPath = Join-Path $cache 'io.legacylens.host.json'
     @{ name='io.legacylens.host'; description='LegacyLens controlled fixture host'; path=(Join-Path $cache 'legacylens-host.exe'); type='stdio'; allowed_origins=@("chrome-extension://$ExtensionId/") } | ConvertTo-Json | Set-Content -LiteralPath $manifestPath -Encoding utf8

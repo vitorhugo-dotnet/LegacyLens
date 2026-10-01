@@ -21,16 +21,32 @@ foreach ($entry in @(@($state.wildflyPid,$state.wildflyPath),@($state.corePid,$s
   $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($entry[0])" -ErrorAction SilentlyContinue
   if ($process -and $process.CommandLine -and $process.CommandLine.Contains([string]$entry[1])) { Stop-Process -Id $entry[0] -Force }
 }
-if ($state.containerName -match '^legacylens-fixture-[0-9a-f]{12}$') {
-  $id = & docker inspect -f '{{.Id}}' $state.containerName 2>$null
-  if ($LASTEXITCODE -eq 0 -and $id -eq $state.containerId) { & docker stop $state.containerName | Out-Null }
+if ($state.mysqlPid -and $state.mysqlPath) {
+  $expectedMysqlPath = [IO.Path]::GetFullPath((Join-Path $cache 'mysql57\mysql-5.7.44-winx64\bin\mysqld.exe'))
+  if ([IO.Path]::GetFullPath([string]$state.mysqlPath) -eq $expectedMysqlPath) {
+    $mysqlProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($state.mysqlPid)" -ErrorAction SilentlyContinue
+    if ($mysqlProcess -and [IO.Path]::GetFullPath([string]$mysqlProcess.ExecutablePath) -eq $expectedMysqlPath) {
+      $mysqlHome = Split-Path -Path (Split-Path -Path $expectedMysqlPath -Parent) -Parent
+      $mysqladmin = Join-Path $mysqlHome 'bin\mysqladmin.exe'
+      & $mysqladmin --no-defaults --protocol=tcp --host=127.0.0.1 "--port=$($state.mysqlPort)" --user=root --password=fixture-root shutdown 2>$null | Out-Null
+      for ($i=0; $i -lt 20; $i++) {
+        if (!(Get-CimInstance Win32_Process -Filter "ProcessId=$($state.mysqlPid)" -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 250
+      }
+      if (Get-CimInstance Win32_Process -Filter "ProcessId=$($state.mysqlPid)" -ErrorAction SilentlyContinue) { Stop-Process -Id $state.mysqlPid -Force }
+    }
+  }
 }
 Remove-Item -LiteralPath $statePath -Force
 Remove-Item -LiteralPath (Join-Path $cache 'agent.properties') -Force -ErrorAction SilentlyContinue
-if ($state.runtime -and $state.containerName -match '^legacylens-fixture-[0-9a-f]{12}$') {
-  $expected = Join-Path $env:TEMP $state.containerName
+if ($state.runtime -and $state.fixtureId -match '^legacylens-fixture-[0-9a-f]{12}$') {
+  $expected = Join-Path $env:TEMP $state.fixtureId
   if ([IO.Path]::GetFullPath($expected) -eq [IO.Path]::GetFullPath([string]$state.runtime)) {
     Remove-Item -LiteralPath (Join-Path $expected 'agent.properties'),(Join-Path $expected 'agent.jar') -Force -ErrorAction SilentlyContinue
     try { Remove-Item -LiteralPath $expected -ErrorAction Stop } catch { }
   }
+}
+$expectedMysqlData = Join-Path $cache 'mysql-data'
+if ($state.mysqlData -and [IO.Path]::GetFullPath([string]$state.mysqlData) -eq [IO.Path]::GetFullPath($expectedMysqlData) -and !(Get-CimInstance Win32_Process -Filter "ProcessId=$($state.mysqlPid)" -ErrorAction SilentlyContinue)) {
+  Remove-Item -LiteralPath $expectedMysqlData -Recurse -Force -ErrorAction SilentlyContinue
 }
