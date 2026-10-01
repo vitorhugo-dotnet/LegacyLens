@@ -12,6 +12,7 @@ function randomHex(bytes: number): string {
 export class CaptureController {
   private captures = new Map<number, ActiveCapture>();
   private starting = new Set<number>();
+  private stopping = new Set<number>();
   private recording = new Map<number, Promise<void>>();
   private loading?: Promise<void>;
 
@@ -42,26 +43,43 @@ export class CaptureController {
       if (!/^[a-f0-9]{32}$/i.test(session.id) || session.projectId !== request.projectId) throw new Error('Invalid capture session');
       const entry: ActiveCapture = { request, session, producerId: randomHex(8), sequence: 0, gap: false };
       this.captures.set(request.tabId, entry);
-      await this.persist();
+      try { await this.persist(); }
+      catch (storageError) {
+        let rollbackError: unknown;
+        try { await this.client.request('capture.stop', { projectId: request.projectId, traceId: session.id }); }
+        catch (error) { rollbackError = error; }
+        if (rollbackError) {
+          throw new Error('Capture state could not be saved and native rollback failed; capture remains active', { cause: rollbackError });
+        }
+        this.captures.delete(request.tabId);
+        throw new Error('Capture state could not be saved; native capture was stopped', { cause: storageError });
+      }
       return session;
     } finally { this.starting.delete(request.tabId); }
   }
 
   async stop(tabId: number): Promise<void> {
-    await this.restore();
-    const entry = this.captures.get(tabId);
-    if (!entry) return;
-    if (entry.gap) {
-      await this.sendEvent(entry, 'extension.gap', { code: 'CAPTURE_RECONNECTED' });
-      entry.gap = false;
+    if (this.stopping.has(tabId)) throw new Error('Capture is already stopping');
+    this.stopping.add(tabId);
+    try {
+      await this.restore();
+      const pending = this.recording.get(tabId);
+      if (pending) await pending;
+      const entry = this.captures.get(tabId);
+      if (!entry) return;
+      if (entry.gap) {
+        await this.sendEvent(entry, 'extension.gap', { code: 'CAPTURE_RECONNECTED' });
+        entry.gap = false;
+        await this.persist();
+      }
+      await this.client.request('capture.stop', { projectId: entry.request.projectId, traceId: entry.session.id });
+      this.captures.delete(tabId);
       await this.persist();
-    }
-    await this.client.request('capture.stop', { projectId: entry.request.projectId, traceId: entry.session.id });
-    this.captures.delete(tabId);
-    await this.persist();
+    } finally { this.stopping.delete(tabId); }
   }
 
   async record(tabId: number, kind: string, metadata: Record<string, string>): Promise<void> {
+    if (this.stopping.has(tabId)) throw new Error('Capture is stopping');
     const previous = this.recording.get(tabId) ?? Promise.resolve();
     const next = previous.catch(() => {}).then(() => this.recordNow(tabId, kind, metadata));
     this.recording.set(tabId, next);

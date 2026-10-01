@@ -45,4 +45,55 @@ describe('CaptureController', () => {
     const kinds = commands.map(({ payload }) => (payload as { events: Array<{ kind: string }> }).events[0]?.kind);
     expect(kinds).toEqual(['extension.gap', 'jsf.click']);
   });
+
+  it('finishes pending ingestion before stop and rejects events queued after stop', async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const controller = new CaptureController({ request: async <T>(command: string): Promise<T> => {
+      calls.push(command);
+      if (command === 'trace.ingest') await pending;
+      if (command === 'capture.start') return { id: 'a'.repeat(32), projectId: 'project', startedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() } as T;
+      return {} as T;
+    } });
+    await controller.start({ projectId: 'project', tabId: 4, origin: 'https://app.example' });
+    const record = controller.record(4, 'jsf.click', { source: 'form:save' });
+    const stop = controller.stop(4);
+    await Promise.resolve();
+    expect(calls).not.toContain('capture.stop');
+    release();
+    await Promise.all([record, stop]);
+    await controller.record(4, 'jsf.click', { source: 'later' });
+    expect(calls).toEqual(['capture.start', 'trace.ingest', 'capture.stop']);
+  });
+
+  it('rolls back a native capture when saving the new session fails', async () => {
+    const commands: string[] = [];
+    let saves = 0;
+    const controller = new CaptureController({ request: async <T>(command: string): Promise<T> => {
+      commands.push(command);
+      if (command === 'capture.start') return { id: 'a'.repeat(32), projectId: 'project', startedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() } as T;
+      return {} as T;
+    } }, { load: async () => [], save: async () => { if (++saves === 1) throw new Error('storage unavailable'); } });
+    await expect(controller.start({ projectId: 'project', tabId: 5, origin: 'https://app.example' })).rejects.toThrow('could not be saved');
+    expect(commands).toEqual(['capture.start', 'capture.stop']);
+    expect(controller.get(5)).toBeUndefined();
+    await expect(controller.start({ projectId: 'project', tabId: 5, origin: 'https://app.example' })).resolves.toMatchObject({ id: 'a'.repeat(32) });
+  });
+
+  it('keeps a failed native rollback visible and allows a later stop', async () => {
+    const commands: string[] = [];
+    let stops = 0;
+    const controller = new CaptureController({ request: async <T>(command: string): Promise<T> => {
+      commands.push(command);
+      if (command === 'capture.start') return { id: 'a'.repeat(32), projectId: 'project', startedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() } as T;
+      if (command === 'capture.stop' && ++stops === 1) throw new Error('host unavailable');
+      return {} as T;
+    } }, { load: async () => [], save: async () => { if (stops === 0) throw new Error('storage unavailable'); } });
+    await expect(controller.start({ projectId: 'project', tabId: 6, origin: 'https://app.example' })).rejects.toThrow('capture remains active');
+    expect(controller.get(6)).toBeDefined();
+    await controller.stop(6);
+    expect(controller.get(6)).toBeUndefined();
+    expect(commands).toEqual(['capture.start', 'capture.stop', 'capture.stop']);
+  });
 });

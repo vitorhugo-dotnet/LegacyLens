@@ -15,7 +15,7 @@ export default defineContentScript({
       uninstall?.(); nonce = detail.nonce;
       uninstall = adapter.install({ origin: location.origin, traceId: detail.traceId!,
         nextSpanId: () => [...crypto.getRandomValues(new Uint8Array(8))].map((n) => n.toString(16).padStart(2, '0')).join(''),
-        onAjax: (action) => window.dispatchEvent(new CustomEvent('legacylens:ajax', { detail: { nonce, source: action.source, traceparent: action.traceparent, spanId: action.spanId } })),
+        onAjax: (action) => window.dispatchEvent(new CustomEvent('legacylens:ajax', { detail: { nonce, source: action.source, propagation: action.propagation, traceparent: action.traceparent, spanId: action.spanId } })),
         onDiagnostic: (code) => window.dispatchEvent(new CustomEvent('legacylens:ajax', { detail: { nonce, code } })),
       });
     });

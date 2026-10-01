@@ -58,7 +58,7 @@ export default defineContentScript({
     };
     chrome.runtime.onMessage.addListener((message: unknown) => { if ((message as { type?: string })?.type === 'selection.open') void open(); });
     window.addEventListener('legacylens:ajax', (event) => {
-      const detail = (event as CustomEvent).detail as { nonce?: string; source?: string; traceparent?: string; spanId?: string; code?: string };
+      const detail = (event as CustomEvent).detail as { nonce?: string; source?: string; propagation?: string; traceparent?: string; spanId?: string; code?: string };
       if (!session || !detail || detail.nonce !== nonce) return;
       if (typeof detail.code === 'string' && /^UNSUPPORTED_[A-Z_]+$/.test(detail.code)) {
         void ask({ type: 'capture.event', sessionId: session.id, kind: 'extension.diagnostic', metadata: { code: detail.code } }).catch(() => {});
@@ -67,7 +67,15 @@ export default defineContentScript({
         return;
       }
       if (typeof detail.source !== 'string' || detail.source.length > 256) return;
-      if (detail.source !== selectedSource || !detail.traceparent || !detail.spanId) return;
+      if (detail.source !== selectedSource) return;
+      if (detail.propagation === 'attempted' && !detail.spanId && !detail.traceparent) {
+        void ask({ type: 'capture.event', sessionId: session.id, kind: 'primefaces.propagation_attempt', metadata: { source: detail.source } }).catch(() => {
+          const status = document.querySelector('[data-legacylens-ui] [role="status"]');
+          if (status) status.textContent = 'Capture transport interrupted; investigation has a gap.';
+        });
+        return;
+      }
+      if (detail.propagation !== 'propagated' || !detail.traceparent || !detail.spanId) return;
       if (detail.traceparent !== `00-${session.id}-${detail.spanId}-01` || !/^[a-f0-9]{16}$/i.test(detail.spanId)) return;
       void ask({ type: 'capture.event', sessionId: session.id, kind: 'primefaces.ajax', metadata: { source: detail.source, ...(detail.spanId && /^[a-f0-9]{16}$/i.test(detail.spanId) ? { spanId: detail.spanId } : {}) } }).catch(() => {
         const status = document.querySelector('[data-legacylens-ui] [role="status"]');

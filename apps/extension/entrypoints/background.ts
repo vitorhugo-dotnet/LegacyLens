@@ -44,7 +44,7 @@ export default defineBackground(() => {
         await controller.restore();
         const active = controller.get(tabId);
         if (!active || active.session.id !== msg.sessionId || active.request.origin !== senderOrigin) throw new Error('Unmatched capture event');
-        if (!['jsf.click', 'primefaces.ajax', 'extension.diagnostic'].includes(msg.kind)) throw new Error('Unsupported event kind');
+        if (!['jsf.click', 'primefaces.ajax', 'primefaces.propagation_attempt', 'extension.diagnostic'].includes(msg.kind)) throw new Error('Unsupported event kind');
         const metadata = msg.metadata;
         if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('Invalid event metadata');
         const safe: Record<string, string> = {};
