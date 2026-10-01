@@ -32,28 +32,30 @@ func TestEventsWithoutJavaDestinationAndRelationsWithoutLocationAreRepresentable
 	}
 }
 
-func TestValidInteractionExampleDecodesWithoutInventedDestinationOrLocation(t *testing.T) {
+func TestValidInteractionExampleDecodesTraceIngestEnvelope(t *testing.T) {
 	data, err := os.ReadFile("../../../contracts/examples/valid-interaction.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var example struct {
-		Payload struct {
-			Interaction Interaction `json:"interaction"`
-			Events      []Event     `json:"events"`
-			Relations   []Relation  `json:"relations"`
+		ProtocolVersion int    `json:"protocolVersion"`
+		RequestID       string `json:"requestId"`
+		Command         string `json:"command"`
+		Payload         struct {
+			ProjectID ID     `json:"projectId"`
+			Events    []Event `json:"events"`
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(data, &example); err != nil {
 		t.Fatal(err)
 	}
-	if example.Payload.Interaction.ID != "interaction-1" || len(example.Payload.Events) != 1 || len(example.Payload.Relations) != 1 {
+	if example.ProtocolVersion != 1 || example.RequestID != "request-1" || example.Command != "trace.ingest" ||
+		example.Payload.ProjectID != "project-1" || len(example.Payload.Events) != 1 {
 		t.Fatalf("example was not decoded as expected: %+v", example.Payload)
 	}
-	if example.Payload.Events[0].JavaDestination != nil {
+	if event := example.Payload.Events[0]; event.ProjectID != example.Payload.ProjectID || event.Kind != "interaction" {
+		t.Fatalf("interaction event was not decoded as expected: %+v", event)
+	} else if event.JavaDestination != nil {
 		t.Fatal("browser event example must not invent a Java destination")
-	}
-	if example.Payload.Relations[0].ToID != nil || example.Payload.Relations[0].Location != nil {
-		t.Fatal("relation example must not invent target or source location")
 	}
 }
