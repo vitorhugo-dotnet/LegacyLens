@@ -115,8 +115,8 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
       const pending=await investigation(trace);
       const events=pending.events.items;
       return {
-        methods:events.filter((event)=>event.kind==='method.start').map((event)=>event.metadata?.['code.method']).sort(),
-        insert:events.some((event)=>event.kind==='method.start'&&event.metadata?.['code.method']==='insert'),
+        methods:events.filter((event)=>event.kind==='method.start').map((event)=>`${event.metadata?.['code.class']}#${event.metadata?.['code.method']}`).sort(),
+        insert:events.some((event)=>event.kind==='method.start'&&event.metadata?.['code.class']==='io.legacylens.fixture.OrderDao'&&event.metadata?.['code.method']==='insert'),
         update:events.some((event)=>event.kind==='db.update'&&event.metadata?.sql==='INSERT INTO orders (note) VALUES (?)'),
         losses:events.filter((event)=>event.kind==='agent.loss').map((event)=>event.metadata?.['agent.dropped_count']),
       };
@@ -136,16 +136,27 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
     const edges=result.relations.items.filter((relation)=>relation.kind==='http.request');
     expect(edges.length).toBeGreaterThanOrEqual(2);
     expect(observedRequests.some((request)=>!request.parent),'unrelated poll must stay unlinked').toBe(true);
-    const chain=(names:string[])=>{
+    const chain=(expected:{className:string;method:string}[])=>{
       const byId=new Map(events.map((event)=>[event.eventId,event]));
-      const last=events.find((event)=>event.kind==='method.start'&&event.metadata?.['code.method']===names[names.length-1]);
-      expect(last,`missing ${names[names.length-1]}`).toBeDefined();
+      const leaf=expected[expected.length-1]!;
+      const last=events.find((event)=>event.kind==='method.start'&&event.metadata?.['code.class']===leaf.className&&event.metadata?.['code.method']===leaf.method);
+      expect(last,`missing ${leaf.className}.${leaf.method}`).toBeDefined();
       const ancestors:Event[]=[];let current:Event|undefined=last;
       while(current){ancestors.push(current);current=current.parentEventId?byId.get(current.parentEventId):undefined;}
-      for(const name of names)expect(ancestors.some((event)=>event.kind==='method.start'&&event.metadata?.['code.method']===name),`missing causal ancestor ${name}`).toBe(true);
+      let previousIndex=-1;
+      for(const expectedMethod of [...expected].reverse()) {
+        const index=ancestors.findIndex((event,position)=>position>previousIndex&&event.kind==='method.start'
+          &&event.metadata?.['code.class']===expectedMethod.className&&event.metadata?.['code.method']===expectedMethod.method);
+        expect(index,`missing ordered causal ancestor ${expectedMethod.className}.${expectedMethod.method}`).toBeGreaterThan(previousIndex);
+        previousIndex=index;
+      }
       expect(ancestors.some((event)=>event.kind==='http.server')).toBe(true);
     };
-    chain(['save','save','insert']);
+    chain([
+      {className:'io.legacylens.fixture.OrderBean',method:'save'},
+      {className:'io.legacylens.fixture.OrderService',method:'save'},
+      {className:'io.legacylens.fixture.OrderDao',method:'insert'},
+    ]);
     expect(events.some((event)=>event.kind==='db.update'&&event.metadata?.sql==='INSERT INTO orders (note) VALUES (?)')).toBe(true);
     expect(JSON.stringify(result)).not.toContain('fixture-private-order-value');
     expect(JSON.stringify(result)).not.toContain('traceparent');

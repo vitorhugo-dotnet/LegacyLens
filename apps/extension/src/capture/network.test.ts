@@ -36,6 +36,9 @@ describe('network capture', () => {
     const effects: NetworkEffect[] = [];
     const calls: Request[] = [];
     const original = globalThis.fetch;
+    const originalDocument = globalThis.document;
+    const button = { onclick: () => fetch('https://app.example/save') };
+    globalThis.document = { getElementById: (id: string) => id === 'save' ? button : null } as unknown as Document;
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push(new Request(input, init));
       return new Response('ok');
@@ -44,12 +47,42 @@ describe('network capture', () => {
     try {
       armInteraction(interaction);
       await Promise.resolve();
-      await fetch('https://app.example/save');
+      await button.onclick();
       await new Promise((resolve) => setTimeout(resolve, 0));
       await fetch('https://app.example/poll');
       expect(calls.map((call) => call.headers.has('traceparent'))).toEqual([true, false]);
       expect(effects).toEqual([expect.objectContaining({ source: 'save', transport: 'fetch', propagation: 'propagated' })]);
-    } finally { stopNetwork(); globalThis.fetch = original; }
+    } finally { stopNetwork(); globalThis.fetch = original; globalThis.document = originalDocument; }
+  });
+
+  it('does not link an unrelated poll microtask while a selected click is armed', async () => {
+    const effects: NetworkEffect[] = [];
+    const calls: Request[] = [];
+    const original = globalThis.fetch;
+    const originalXHR = globalThis.XMLHttpRequest;
+    class PollXHR {
+      headers = new Map<string, string>();
+      open() {}
+      setRequestHeader(name: string, value: string) { this.headers.set(name.toLowerCase(), value); }
+      send() { return 'sent'; }
+    }
+    globalThis.XMLHttpRequest = PollXHR as unknown as typeof XMLHttpRequest;
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(new Request(input, init));
+      return new Response('ok');
+    };
+    const stopNetwork = installNetworkCapture(context(effects));
+    try {
+      armInteraction(interaction);
+      await Promise.resolve();
+      await fetch('https://app.example/poll');
+      const xhr = new XMLHttpRequest() as unknown as PollXHR & XMLHttpRequest;
+      xhr.open('GET', 'https://app.example/poll');
+      xhr.send();
+      expect(calls[0]?.headers.has('traceparent')).toBe(false);
+      expect(xhr.headers.has('traceparent')).toBe(false);
+      expect(effects).toEqual([]);
+    } finally { stopNetwork(); globalThis.fetch = original; globalThis.XMLHttpRequest = originalXHR; }
   });
 
   it('leaves unlinked, cross-origin and existing traceparent requests untouched', async () => {
@@ -188,7 +221,8 @@ describe('network capture', () => {
     const other = new FakeElement('other');
     const result = new FakeElement('result');
     globalThis.Element = FakeElement as unknown as typeof Element;
-    globalThis.document = { querySelector: (selector: string) => selector === '#save' ? save : selector === '#other' ? other : result } as unknown as Document;
+    globalThis.document = { querySelector: (selector: string) => selector === '#save' ? save : selector === '#other' ? other : result,
+      getElementById: (id: string) => id === 'save' ? save : id === 'other' ? other : result } as unknown as Document;
     const requests: Request[] = [];
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       requests.push(new Request(input instanceof Request ? input : new URL(String(input), 'https://app.example'), init));

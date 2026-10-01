@@ -8,8 +8,9 @@ export interface InteractionContext {
 let active: InteractionContext | undefined;
 let armed: InteractionContext | undefined;
 let observing = 0;
+let restoreInline: (() => void) | undefined;
 
-export function currentInteraction(): InteractionContext | undefined { return observing ? undefined : active ?? armed; }
+export function currentInteraction(): InteractionContext | undefined { return observing ? undefined : active; }
 
 export function withInteraction<T>(context: InteractionContext, fn: () => T): T {
   const previous = active;
@@ -32,8 +33,23 @@ export function bindInteraction<T extends (...args: any[]) => any>(fn: T, contex
 
 /** Arm only the selected click. Callbacks already registered before installation remain an explicit gap. */
 export function armInteraction(context: InteractionContext): void {
+  restoreInline?.();
   armed = context;
-  setTimeout(() => { if (armed === context) armed = undefined; }, 0);
+  const element = typeof document === 'undefined' ? null : document.getElementById(context.source);
+  const original = element?.onclick;
+  if (element && typeof original === 'function') {
+    const wrapped = function (this: GlobalEventHandlers, event: MouseEvent) {
+      return withInteraction(context, () => Reflect.apply(original, this, [event]));
+    };
+    element.onclick = wrapped;
+    const restore = () => {
+      if (element.onclick === wrapped) element.onclick = original;
+      if (restoreInline === restore) restoreInline = undefined;
+    };
+    restoreInline = restore;
+  }
+  const restore = restoreInline;
+  setTimeout(() => { if (armed === context) armed = undefined; restore?.(); }, 0);
 }
 
 export function installAsyncContextCapture(): () => void {
@@ -104,6 +120,7 @@ export function installAsyncContextCapture(): () => void {
   return () => {
     enabled = false;
     armed = undefined;
+    restoreInline?.();
     if (globalThis.setTimeout !== originalTimeout) globalThis.setTimeout = originalTimeout;
     if (globalThis.setInterval !== originalInterval) globalThis.setInterval = originalInterval;
     if (globalThis.queueMicrotask !== originalMicrotask) globalThis.queueMicrotask = originalMicrotask;
