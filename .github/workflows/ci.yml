@@ -66,14 +66,45 @@ jobs:
           if ((java -version 2>&1 | Select-Object -First 1) -notmatch '21\.') { throw 'Expected Java 21 runtime.' }
           mvn -B -f java/pom.xml -pl agent -am verify
           ./scripts/test-agent-smoke.ps1 -AgentJar java/agent/target/agent-0.1.0.jar -AgentSmokeClassPath java/agent/target/test-classes
+
+  legacy-e2e:
+    name: Legacy fixture and end-to-end browser flow
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.15.0
+          cache: npm
       - name: Test legacy fixture and end-to-end browser flow
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
+          npm ci
           mvn -B -f fixtures/legacy/pom.xml verify
           npm exec --workspace tests/e2e -- playwright install chromium
           npm test --workspace tests/e2e
+
+  windows-package:
+    name: Build Windows x64 package
+    runs-on: windows-latest
+    needs:
+      - checks
+      - legacy-e2e
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
       - name: Build Windows x64 package
         shell: pwsh
         run: ./scripts/package-release.ps1 -OutputDirectory artifacts -VerifiedChecks @('contracts','extension','core','java8-runtime','java8-agent-smoke','java21-runtime','java21-agent-smoke','legacy-fixture','legacy-e2e')
