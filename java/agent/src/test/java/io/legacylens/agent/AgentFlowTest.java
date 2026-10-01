@@ -92,6 +92,36 @@ class AgentFlowTest {
         assertFalse(queries.get(0).toJson().contains("parameter-secret"));
         assertTrue(events.stream().noneMatch(event->event.kind.equals("db.prepare")),"preparation alone is not an executed query");
     }
+    @Test void nestedServletsKeepCausalParentsInsideTheirTrace() throws Exception {
+        AgentTransport transport=AgentTransport.forTesting(64);
+        LegacyLensAgent.installForTesting(ByteBuddyAgent.install(),transport,AgentConfig.forTesting("sample.app"));
+        exerciseNestedServlets("11111111111111111111111111111111","22222222222222222222222222222222");
+        exerciseNestedServlets("33333333333333333333333333333333","33333333333333333333333333333333");
+        java.util.List<Event> events=new java.util.ArrayList<Event>();for(Event event;(event=transport.pollForTesting())!=null;)events.add(event);
+        java.util.Map<String,Event> byId=new java.util.HashMap<String,Event>();
+        for(Event event:events)assertNull(byId.put(event.eventId,event),"event identities must be unique across trace states");
+        for(Event event:events)if(event.parentEventId!=null){Event parent=byId.get(event.parentEventId);assertNotNull(parent,"parent must be present in the captured flow");assertEquals(event.traceId,parent.traceId,"causal edges cannot cross trace IDs");assertNotEquals(event.eventId,event.parentEventId,"an event cannot parent itself");}
+        Event outerDifferent=http(events,"11111111111111111111111111111111",1);
+        Event innerDifferent=http(events,"22222222222222222222222222222222",1);
+        assertNull(outerDifferent.parentEventId);assertNull(innerDifferent.parentEventId);
+        Event restoredOuter=events.stream().filter(e->e.traceId.equals(outerDifferent.traceId)&&e.kind.equals("method.start")&&"load".equals(e.metadata.get("code.method"))).findFirst().get();
+        assertEquals(outerDifferent.eventId,restoredOuter.parentEventId,"after the inner trace exits, the outer context remains current");
+        java.util.List<Event> outerEvents=events.stream().filter(e->e.traceId.equals(outerDifferent.traceId)).collect(java.util.stream.Collectors.toList());
+        assertEquals(outerDifferent.producerId,restoredOuter.producerId);assertEquals(2,restoredOuter.sequence,"nested other-trace events must not advance the outer trace sequence");
+        for(int i=0;i<outerEvents.size();i++){assertEquals(i+1,outerEvents.get(i).sequence);assertEquals(outerDifferent.producerId,outerEvents.get(i).producerId);}
+        Event outerSame=http(events,"33333333333333333333333333333333",1);
+        Event innerSame=http(events,"33333333333333333333333333333333",2);
+        assertEquals(outerSame.eventId,innerSame.parentEventId,"same-trace nested HTTP requests retain the causal edge");
+        java.util.List<Event> sameTrace=events.stream().filter(e->e.traceId.equals(outerSame.traceId)).collect(java.util.stream.Collectors.toList());
+        for(int i=0;i<sameTrace.size();i++)assertEquals(i+1,sameTrace.get(i).sequence);
+    }
+    private void exerciseNestedServlets(String outerTrace,String innerTrace)throws Exception {
+        String innerParent="00-"+innerTrace+"-abcdef0123456789-01";
+        Class<?> type=Class.forName("javax.servlet.fake.NestedServlet");Object servlet=type.getDeclaredConstructor(String.class).newInstance(innerParent);
+        FakeServlet.Request request=new FakeServlet.TraceRequest("00-"+outerTrace+"-0123456789abcdef-01");
+        type.getMethod("service",Object.class,Object.class).invoke(servlet,request,new Object());
+    }
+    private static Event http(java.util.List<Event> events,String trace,long sequence){return events.stream().filter(e->e.traceId.equals(trace)&&e.kind.equals("http.server")&&e.sequence==sequence).findFirst().orElseThrow(()->new AssertionError("missing HTTP event for "+trace+" sequence "+sequence+"; observed="+events.stream().map(e->e.traceId+":"+e.sequence+":"+e.kind+":"+e.parentEventId).collect(java.util.stream.Collectors.toList())));}
     private Class<?> isolatedSampleClass() throws Exception {byte[] bytes;try(InputStream in=getClass().getResourceAsStream("/sample/app/SampleApplication.class")){bytes=new byte[in.available()];int n=in.read(bytes);assertEquals(bytes.length,n);}return new ClassLoader(getClass().getClassLoader()){protected Class<?> loadClass(String name,boolean resolve)throws ClassNotFoundException{synchronized(getClassLoadingLock(name)){if(name.equals("sample.app.SampleApplication")){Class<?> c=findLoadedClass(name);if(c==null)c=defineClass(name,bytes,0,bytes.length);if(resolve)resolveClass(c);return c;}return super.loadClass(name,resolve);}}}.loadClass("sample.app.SampleApplication");}
     private Class<?> isolatedSampleClassWithoutParent() throws Exception {byte[] bytes=classBytes("/sample/app/IsolatedApplication.class");ClassLoader loader=new ClassLoader(null){protected Class<?> findClass(String name)throws ClassNotFoundException{if(!name.equals("sample.app.IsolatedApplication"))throw new ClassNotFoundException(name);return defineClass(name,bytes,0,bytes.length);}};return loader.loadClass("sample.app.IsolatedApplication");}
     private Class<?> isolatedClassWithoutDebugLine() throws Exception {byte[] bytes=new ByteBuddy().subclass(Object.class).name("sample.app.NoDebugApplication").defineMethod("run",void.class,java.lang.reflect.Modifier.PUBLIC).intercept(StubMethod.INSTANCE).make().getBytes();final boolean[] foundLine={false};new net.bytebuddy.jar.asm.ClassReader(bytes).accept(new net.bytebuddy.jar.asm.ClassVisitor(net.bytebuddy.jar.asm.Opcodes.ASM9){@Override public net.bytebuddy.jar.asm.MethodVisitor visitMethod(int access,String name,String descriptor,String signature,String[] exceptions){return new net.bytebuddy.jar.asm.MethodVisitor(net.bytebuddy.jar.asm.Opcodes.ASM9){@Override public void visitLineNumber(int line,net.bytebuddy.jar.asm.Label start){foundLine[0]=true;}};}},0);assertFalse(foundLine[0],"fixture must truly have no LineNumberTable");ClassLoader loader=new ClassLoader(null){protected Class<?> findClass(String name)throws ClassNotFoundException{if(!name.equals("sample.app.NoDebugApplication"))throw new ClassNotFoundException(name);return defineClass(name,bytes,0,bytes.length);}};return loader.loadClass("sample.app.NoDebugApplication");}

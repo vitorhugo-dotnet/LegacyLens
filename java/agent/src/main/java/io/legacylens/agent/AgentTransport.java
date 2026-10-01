@@ -17,6 +17,7 @@ public final class AgentTransport {
     static final int DEFAULT_TRACE_STATE_CAPACITY = 4096;
     private static final String PROCESS_NONCE = TraceContext.hex(8);
     private static final AtomicLong PRODUCER_EPOCH = new AtomicLong();
+    private static final long CAPACITY_DIAGNOSTIC_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1L);
 
     private static final class PendingEvent {
         final Event event;
@@ -43,6 +44,8 @@ public final class AgentTransport {
     private final AgentConfig config;
     private final Runnable afterLossPostedForTesting;
     private final AtomicLong capacityRejected = new AtomicLong();
+    private final AtomicLong pendingCapacityRejected = new AtomicLong();
+    private long nextCapacityDiagnosticAtNanos;
     private volatile boolean closed;
     private volatile boolean recoveryDiagnostic;
 
@@ -82,7 +85,7 @@ public final class AgentTransport {
                 return state;
             }
             if (traceStates.size() >= traceStateCapacity) {
-                capacityRejected.incrementAndGet();
+                recordCapacityRejection();
                 return null;
             }
             String producerId = configuredProducerId + "-" + PROCESS_NONCE + "-" + PRODUCER_EPOCH.incrementAndGet();
@@ -98,7 +101,7 @@ public final class AgentTransport {
             TraceState state = traceStates.get(event.traceId);
             if (state != null) return state;
             if (traceStates.size() >= traceStateCapacity) {
-                capacityRejected.incrementAndGet();
+                recordCapacityRejection();
                 return null;
             }
             state = new TraceState(event.traceId, event.producerId);
@@ -148,6 +151,11 @@ public final class AgentTransport {
         return true;
     }
 
+    private void recordCapacityRejection() {
+        capacityRejected.incrementAndGet();
+        pendingCapacityRejected.incrementAndGet();
+    }
+
     long nextSequence(TraceState state) {
         synchronized (stateLock) { return ++state.sequence; }
     }
@@ -187,6 +195,7 @@ public final class AgentTransport {
             PendingEvent pending = null;
             try {
                 pending = queue.poll(100, TimeUnit.MILLISECONDS);
+                reportCapacityRejections();
                 if (pending == null) {
                     reportPendingLosses();
                     continue;
@@ -203,6 +212,16 @@ public final class AgentTransport {
                 if (pending != null) failEvent(pending.state);
             }
         }
+    }
+
+    private void reportCapacityRejections() {
+        long now=System.nanoTime();
+        if(now<nextCapacityDiagnosticAtNanos)return;
+        long count=pendingCapacityRejected.getAndSet(0L);
+        if(count==0L)return;
+        nextCapacityDiagnosticAtNanos=now+CAPACITY_DIAGNOSTIC_INTERVAL_NANOS;
+        try { System.err.println("{\"kind\":\"agent.capacity_rejected\",\"count\":"+count+"}"); }
+        catch(RuntimeException ignored) { pendingCapacityRejected.addAndGet(count); }
     }
 
     private void completeEvent(TraceState state) {

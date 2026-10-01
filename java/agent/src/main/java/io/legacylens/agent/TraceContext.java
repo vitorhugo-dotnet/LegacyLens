@@ -12,7 +12,7 @@ public final class TraceContext {
     private final String inheritedParentEventId;
     private TraceContext(String t,String s,String p,String inherited,AgentTransport.TraceState traceState){traceId=t;spanId=s;parentSpanId=p;inheritedParentEventId=inherited;state=traceState;}
     public static TraceContext current(){Deque<TraceContext>d=CURRENT.get();return d==null?null:d.peek();}
-    static TraceContext begin(String trace,String parent,AgentTransport.TraceState state){Deque<TraceContext>d=CURRENT.get();if(d==null){d=new ArrayDeque<TraceContext>();CURRENT.set(d);}TraceContext enclosing=d.peek();String inherited=enclosing==null?null:enclosing.currentEventId();TraceContext c=new TraceContext(trace,hex(8),parent,inherited,state);d.push(c);return c;}
+    static TraceContext begin(String trace,String parent,AgentTransport.TraceState state){Deque<TraceContext>d=CURRENT.get();if(d==null){d=new ArrayDeque<TraceContext>();CURRENT.set(d);}TraceContext enclosing=d.peek();String inherited=enclosing!=null&&enclosing.traceId.equals(trace)?enclosing.currentEventId():null;TraceContext c=new TraceContext(trace,hex(8),parent,inherited,state);d.push(c);return c;}
     static void pushEvent(String eventId){TraceContext c=current();if(c!=null&&eventId!=null)c.eventStack.push(eventId);}
     static void popEvent(){TraceContext c=current();if(c!=null&&!c.eventStack.isEmpty())c.eventStack.pop();}
     static String parentEventId(){TraceContext c=current();return c==null?null:c.currentEventId();}

@@ -3,17 +3,19 @@ package io.legacylens.agent;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Protocol 1 event sent by the isolated Java producer. */
 public final class Event {
     private static final String PROCESS_NONCE=TraceContext.hex(8);
+    private static final AtomicLong EVENT_ID_SEQUENCE=new AtomicLong();
     public final String projectId, traceId, producerId, eventId, parentEventId, kind, occurredAt, applicationRevision;
     public final long sequence;
     public final Map<String,String> metadata;
     Event(String projectId, String traceId, String producerId, long sequence, String kind, String revision, Map<String,String> metadata) { this(projectId, traceId, producerId, sequence, kind, revision, metadata, null); }
     Event(String projectId, String traceId, String producerId, long sequence, String kind, String revision, Map<String,String> metadata, String parentEventId) {
         this.projectId=projectId; this.traceId=traceId; this.producerId=producerId; this.sequence=sequence;
-        this.eventId="evt-"+PROCESS_NONCE+"-"+sequence; this.parentEventId=parentEventId; this.kind=kind;
+        this.eventId="evt-"+PROCESS_NONCE+"-"+EVENT_ID_SEQUENCE.incrementAndGet(); this.parentEventId=parentEventId; this.kind=kind;
         this.occurredAt=Instant.now().toString(); this.applicationRevision=revision;
         this.metadata=new LinkedHashMap<String,String>(metadata);
     }

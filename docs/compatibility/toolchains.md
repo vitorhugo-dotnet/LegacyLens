@@ -26,3 +26,5 @@ The repository records the Node.js and npm versions in the root `engines` field.
 | Maven Shade Plugin | 3.6.1 | Apache-2.0; its [release notes](https://github.com/apache/maven-shade-plugin/releases/tag/maven-shade-plugin-3.6.1) record ASM 9.8 for Java 25 class files; relocates `net.bytebuddy` to `io.legacylens.internal.bytebuddy` in the agent JAR. |
 
 The Task 6 agent runtime is Java 8, while implementation and required cross-version tests run on the pinned Java 21 toolchain above. Transitive dependency/license inventory is deferred to packaging as specified by the implementation plan.
+
+When the bounded active-trace state table is full, the agent rejects a new trace without assigning the loss to an existing trace. The background transport thread writes a coalesced structured line to the agent process stderr, for example `{"kind":"agent.capacity_rejected","count":3}`. It emits at most one line per second, includes no trace IDs or credentials, and preserves rejections that arrive while the diagnostic sink is writing. Capture remains nonblocking on application threads; check the agent process stderr for this capacity signal.

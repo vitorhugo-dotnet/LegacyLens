@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.util.Collections;
 import java.util.List;
 import java.util.ArrayList;
@@ -100,6 +101,31 @@ class AgentFailureTest {
         assertNotNull(c,"settled state release frees capacity for later captures");transport.releaseTrace(c);
     }
 
+    @Test void capacityRejectionsAreObservableOffThreadAndCoalescedWithoutLosingRacingCounts() throws Exception {
+        PrintStream original=System.err;BlockingDiagnosticStream diagnostics=new BlockingDiagnosticStream();
+            AgentTransport transport=AgentTransport.start(AgentConfig.forTesting("sample.app","http://127.0.0.1:1/v1/events"));
+        System.setErr(diagnostics);
+        try {
+            for(int i=1;i<=AgentTransport.DEFAULT_TRACE_STATE_CAPACITY;i++)
+                assertNotNull(transport.acquireTrace(String.format("%032x",i),"configured-producer"));
+            assertNull(transport.acquireTrace("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","configured-producer"));
+            assertNull(transport.acquireTrace("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","configured-producer"));
+            assertTrue(diagnostics.entered.await(3,TimeUnit.SECONDS),"sender must publish a global capacity diagnostic");
+            String applicationThread=Thread.currentThread().getName();long start=System.nanoTime();
+            assertNull(transport.acquireTrace("cccccccccccccccccccccccccccccccc","configured-producer"));
+            assertNull(transport.acquireTrace("dddddddddddddddddddddddddddddddd","configured-producer"));
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-start)<250,"a stalled diagnostic sink must not block application capture");
+            diagnostics.release.countDown();
+            long deadline=System.currentTimeMillis()+4000;while(diagnostics.lines.size()<2&&System.currentTimeMillis()<deadline)Thread.sleep(10);
+            assertEquals(2,diagnostics.lines.size(),"rate limiter emits one coalesced diagnostic per interval");
+            assertEquals("{\"kind\":\"agent.capacity_rejected\",\"count\":2}",diagnostics.lines.get(0));
+            assertEquals("{\"kind\":\"agent.capacity_rejected\",\"count\":2}",diagnostics.lines.get(1),"rejections racing a blocked report remain pending for the next report");
+            assertTrue(diagnostics.threads.stream().allMatch(thread->thread.equals("legacylens-agent-transport")));
+            assertFalse(diagnostics.threads.contains(applicationThread));
+            for(String line:diagnostics.lines){assertFalse(line.contains("aaaaaaaa"));assertFalse(line.contains("bbbbbbbb"));assertFalse(line.contains("cccccccc"));assertFalse(line.contains("dddddddd"));assertFalse(line.contains("configured-producer"));assertFalse(line.contains("0123456789abcdef"));}
+        } finally { diagnostics.release.countDown();transport.closeForTesting();System.setErr(original); }
+    }
+
     @Test void sanitizerDropsRawSqlParametersAndExceptionText() {
         assertEquals("SELECT * FROM orders WHERE id = ?", Sanitizer.sql("SELECT * FROM orders WHERE id = ?"));
         assertEquals("", Sanitizer.sql("SELECT * FROM orders WHERE id = 42"));
@@ -109,6 +135,14 @@ class AgentFailureTest {
     private static Event event(AgentTransport transport,AgentTransport.TraceState state,String kind) {
         long sequence=transport.nextSequence(state);
         return new Event("p1",state.traceId,state.producerId,sequence,kind,null,new HashMap<String,String>());
+    }
+
+    private static final class BlockingDiagnosticStream extends PrintStream {
+        final List<String> lines=new CopyOnWriteArrayList<String>();
+        final List<String> threads=new CopyOnWriteArrayList<String>();
+        final CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
+        BlockingDiagnosticStream(){super(new ByteArrayOutputStream(),true);}
+        @Override public void println(String line){lines.add(line);threads.add(Thread.currentThread().getName());if(lines.size()==1){entered.countDown();try{release.await(3,TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}}}
     }
 
     private static String endpoint(HttpServer server) { return "http://127.0.0.1:"+server.getAddress().getPort()+"/v1/events"; }

@@ -117,3 +117,40 @@ $env:JAVA_HOME="$env:TEMP\legacylens-task6-jdk8-r1\jdk8u504-b01"
 ```
 
 The final smoke uses the intentionally offline local endpoint, so events remain in agent-local loss state after the assertion; this verifies transformed event creation and bridge resolution, not successful HTTP delivery. Delivery and Go sanitization are independently verified by the focused Go route test. Final shaded JAR SHA-256: `F0CB12DF72239851F5DD53C48AFAED30374649514B223D2D3FA58E546CE73B37`.
+
+## Review fix round 2 (base `5605af6`)
+
+Both open Important findings from `task-6-rereview-1.md` are fixed.
+
+| Finding | Regression evidence | Result |
+|---|---|---|
+| State-cap rejection had no external signal | `AgentFailureTest.capacityRejectionsAreObservableOffThreadAndCoalescedWithoutLosingRacingCounts` fills the real 4096-state table, forces a blocked stderr sink, verifies app-thread rejections complete within 250 ms, then checks two coalesced JSON diagnostics on the sender thread with the exact accumulated counts, one-per-second rate, and no IDs/credentials | Pass |
+| Different-trace nested servlet inherited parent and reused event IDs | `AgentFlowTest.nestedServletsKeepCausalParentsInsideTheirTrace` applies real servlet advice to nested requests using both different and same trace IDs; asserts event IDs unique, every parent exists in the same trace, no self-parent, no cross-trace parent, same-trace nested HTTP parent remains linked, and the outer trace resumes with its producer and next sequence | Pass |
+
+Capacity rejection now increments separate total and pending atomic counters. The transport sender atomically takes the pending count and writes `{"kind":"agent.capacity_rejected","count":N}` to process stderr at most once per second. A slow output sink stalls only the sender; increments racing the write remain in the pending counter for a later report. The signal is global and carries neither trace IDs nor credentials. Rejected work is not assigned to another trace, and no new protocol route or unbounded diagnostic queue was added. Operator guidance is in `docs/compatibility/toolchains.md`.
+
+Different trace IDs now start nested contexts without inheriting an event parent; the ThreadLocal stack still restores the outer context on exit. Same-trace nesting continues to inherit its active event parent. `Event.eventId` now uses a process nonce plus a process-global atomic counter rather than the per-trace sequence, making IDs unique across producer epochs and traces.
+
+The round-2 RED command ran only the two new focused tests on portable JDK 8u504:
+
+```powershell
+$env:JAVA_HOME="$env:TEMP\legacylens-task6-jdk8-r1\jdk8u504-b01"
+$env:Path="$env:JAVA_HOME\bin;F:\apache-maven-3.9.11\bin;$env:Path"
+& 'F:\apache-maven-3.9.11\bin\mvn.cmd' -f java/pom.xml -pl agent -am '-Dtest=AgentFlowTest#nestedServletsKeepCausalParentsInsideTheirTrace,AgentFailureTest#capacityRejectionsAreObservableOffThreadAndCoalescedWithoutLosingRacingCounts' '-Dsurefire.failIfNoSpecifiedTests=false' "-Dmaven.repo.local=$env:TEMP\legacylens-task6-m2" test
+# BUILD FAILURE as expected before implementation: 2 tests, 2 failures, 0 errors.
+# Capacity failed waiting for a global diagnostic; nested flow failed on a duplicate event ID across trace states.
+```
+
+The first nested-flow harness used an anonymous request subclass, whose public header method was reflectively inaccessible through its non-public runtime class. That setup emitted no nested trace. Replacing it with public `FakeServlet.TraceRequest` made the fixture exercise the intended advice path; this was a harness correction, not a product failure.
+
+Final focused tests were then run on both required runtimes. JDK 8u504-b01 and GraalVM JDK 21.0.8+12.1 each passed `AgentFailureTest` (6 tests) and `AgentFlowTest` (8 tests), 14 total, zero failures or errors. Exact command:
+
+```powershell
+$env:JAVA_HOME="$env:TEMP\legacylens-task6-jdk8-r1\jdk8u504-b01" # JDK 8u504-b01
+# Or: $env:JAVA_HOME='F:\graalvm-jdk-21.0.8+12.1'
+$env:Path="$env:JAVA_HOME\bin;F:\apache-maven-3.9.11\bin;$env:Path"
+& 'F:\apache-maven-3.9.11\bin\mvn.cmd' -f java/pom.xml -pl agent -am '-Dtest=AgentFlowTest,AgentFailureTest' '-Dsurefire.failIfNoSpecifiedTests=false' "-Dmaven.repo.local=$env:TEMP\legacylens-task6-m2" test
+# BUILD SUCCESS; AgentFailureTest 6/6, AgentFlowTest 8/8.
+```
+
+The final shaded artifact was packaged and launched under JDK 8 with `-javaagent`; the smoke assertions passed, `javap` reports bytecode major 52, and Byte Buddy remains relocated as documented above. Final round-2 JAR SHA-256: `A3469F15BB4D91AC4A22A9D0F44C35C762C94664C85975F9E4CFFF1E07BF080D`. The Go route was not rerun because round 2 changes only Java instrumentation/transport and support documentation; the prior focused Go route evidence remains applicable.
