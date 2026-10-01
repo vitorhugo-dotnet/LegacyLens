@@ -250,6 +250,20 @@ Cada tarefa termina em um commit dos arquivos explícitos da tarefa, após a val
 - [ ] Implementar exemplo controlado e scripts, artefatos/checksums fixados, configuração nativa para Chromium de teste e pacote preview com executáveis/JAR/extension. Não requer o sistema privado.
 - [ ] Reexecutar cenário com cleanup em `finally`, timeout e logs sanitizados; registrar o resultado do ambiente controlado; commit `test: validate the first complete legacy interaction flow`.
 
+### Task 18: GitHub Actions, pacote Windows e release condicionada
+
+**Files — Create:** `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `scripts/verify.ps1`, `scripts/package-release.ps1`, `scripts/install-native-host.ps1`, `scripts/uninstall-native-host.ps1`, `scripts/test-package.ps1`, `scripts/tests/Package.Tests.ps1`, `scripts/tests/NativeHost.Tests.ps1`, `scripts/tests/Workflow.Tests.ps1`, `packaging/native-host.template.json`, `packaging/release-manifest.schema.json`, `docs/user/windows-installation.md`. **Modify:** `apps/extension/wxt.config.ts` e quickstart.
+
+**Interfaces:** Package produz ZIP Windows x64 com core, host, extensão unpacked, agente e worker Java, scripts, documentação, licenças e SHA-256. Manifest registra commit, versões, protocolo e verificações. Host HKCU usa ID explícito autorizado da extensão; chave pública da extensão pode fixar ID sem distribuir chave privada.
+
+- [ ] Escrever Pester `Package.Tests.ps1`: pacote completo roda `legacylens.exe status` sem Go/Node, JAR carrega em Java 8 e 21; CodeQL CLI ausente. `NativeHost.Tests.ps1`: instalar/remover em caminho com espaços altera somente sua chave/manifesto e é idempotente.
+- [ ] Escrever `Workflow.Tests.ps1`: jobs obrigatórios com resultado `failure`, `cancelled` ou `skipped` tornam publicação inelegível; assets correspondem ao mesmo SHA e tag; schemas e hashes íntegros são requeridos.
+- [ ] Executar `pwsh -File scripts/verify.ps1 -Scope packaging` depois que o script existir; primeiro ciclo deve expor comportamentos ainda ausentes; não publicar para testar o gate.
+- [ ] Implementar CI por push/PR: contratos, Go, TS, JAR Java 8/21, fixtures antiga/recente com MySQL e E2E, e smoke do pacote Windows. Fixar actions por SHA e dependências; timeout, health checks, cleanup e logs sanitizados. Release por tag `v*`, checkout do SHA da tag e jobs próprios que executam/reutilizam verificações desse mesmo SHA via workflow reutilizável; `publish` depende de todos os resultados obrigatórios `success`.
+- [ ] Empacotar em runner Windows e validar sem toolchains no PATH; runner não é prova de Windows 10. Publicar ZIP/manifesto/checksums e notas que distinguem combinações testadas, experimental e sistema real; reexecutar validação dirigida; commit `ci: build tested Windows packages and gate GitHub releases`.
+
+**Ordem de execução revisada:** executar Task 18 imediatamente após Task 10, conforme instrução do usuário em 01/10/2026. Iniciar o CI e o pacote para os componentes existentes nessa etapa. O worker Java da Task 11 e a fixture moderna/redeploy da Task 17 continuam como extensões obrigatórias do pipeline e do pacote antes de considerar o escopo integral da Task 18 completo ou habilitar release. A publicação permanece condicionada aos testes obrigatórios aprovados.
+
 ## Marco B — Análise estática, busca e impacto
 
 ### Task 11: Worker Java/SQL e resolução de símbolos
@@ -336,18 +350,6 @@ Cada tarefa termina em um commit dos arquivos explícitos da tarefa, após a val
 - [ ] Executar os specs em ambas as combinações; falhas de setup são corrigidas antes de julgar instrumentação. Registrar versão de JSF/Faces do runtime, não apenas a declarada no POM.
 - [ ] Implementar fixture recente, detecção de versões/capacidades e isolamento de redeploy. Compatibilidade de bytecode/runtime dos JARs e dependências é verificada em Java 8/21.
 - [ ] Reexecutar cenários, estabelecer baseline de tempo/eventos e degradar para diagnóstico quando runtime não identificado; commit `test: validate legacy and Jakarta compatibility matrices`.
-
-### Task 18: GitHub Actions, pacote Windows e release condicionada
-
-**Files — Create:** `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `scripts/verify.ps1`, `scripts/package-release.ps1`, `scripts/install-native-host.ps1`, `scripts/uninstall-native-host.ps1`, `scripts/test-package.ps1`, `scripts/tests/Package.Tests.ps1`, `scripts/tests/NativeHost.Tests.ps1`, `scripts/tests/Workflow.Tests.ps1`, `packaging/native-host.template.json`, `packaging/release-manifest.schema.json`, `docs/user/windows-installation.md`. **Modify:** `apps/extension/wxt.config.ts` e quickstart.
-
-**Interfaces:** Package produz ZIP Windows x64 com core, host, extensão unpacked, agente e worker Java, scripts, documentação, licenças e SHA-256. Manifest registra commit, versões, protocolo e verificações. Host HKCU usa ID explícito autorizado da extensão; chave pública da extensão pode fixar ID sem distribuir chave privada.
-
-- [ ] Escrever Pester `Package.Tests.ps1`: pacote completo roda `legacylens.exe status` sem Go/Node, JAR carrega em Java 8 e 21; CodeQL CLI ausente. `NativeHost.Tests.ps1`: instalar/remover em caminho com espaços altera somente sua chave/manifesto e é idempotente.
-- [ ] Escrever `Workflow.Tests.ps1`: jobs obrigatórios com resultado `failure`, `cancelled` ou `skipped` tornam publicação inelegível; assets correspondem ao mesmo SHA e tag; schemas e hashes íntegros são requeridos.
-- [ ] Executar `pwsh -File scripts/verify.ps1 -Scope packaging` depois que o script existir; primeiro ciclo deve expor comportamentos ainda ausentes; não publicar para testar o gate.
-- [ ] Implementar CI por push/PR: contratos, Go, TS, JAR Java 8/21, fixtures antiga/recente com MySQL e E2E, e smoke do pacote Windows. Fixar actions por SHA e dependências; timeout, health checks, cleanup e logs sanitizados. Release por tag `v*`, checkout do SHA da tag e jobs próprios que executam/reutilizam verificações desse mesmo SHA via workflow reutilizável; `publish` depende de todos os resultados obrigatórios `success`.
-- [ ] Empacotar em runner Windows e validar sem toolchains no PATH; runner não é prova de Windows 10. Publicar ZIP/manifesto/checksums e notas que distinguem combinações testadas, experimental e sistema real; reexecutar validação dirigida; commit `ci: build tested Windows packages and gate GitHub releases`.
 
 ### Task 19: Validação no Windows 10 e ganho em manutenção
 
