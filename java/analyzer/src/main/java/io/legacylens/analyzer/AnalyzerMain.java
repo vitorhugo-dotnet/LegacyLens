@@ -54,7 +54,7 @@ public final class AnalyzerMain {
     }
     static ObjectNode symbol(ObjectNode result, ObjectMapper mapper, JsonNode input, JsonNode artifact, String name, String descriptor, String kind, int line) {
         String path = artifact.path("path").asText();
-        String symbolId = id(input.path("projectId").asText(), path, name, descriptor);
+        String symbolId = id(input.path("projectId").asText(), input.path("revisionId").asText(), path, name, descriptor);
         for (JsonNode existing : result.path("symbols")) if (symbolId.equals(existing.path("id").asText())) return (ObjectNode) existing;
         ObjectNode value = ((ArrayNode) result.get("symbols")).addObject();
         value.put("id", symbolId);

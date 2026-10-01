@@ -15,7 +15,7 @@ import (
 
 func TestJSONLWorkerHandlesPathWithSpaces(t *testing.T) {
 	t.Setenv("GO_WANT_JAVA_WORKER_HELPER", "1")
-	worker := New(WorkerConfig{Command: os.Args[0], Args: []string{"-test.run=TestWorkerHelper"}, Timeout: time.Second})
+	worker := New(WorkerConfig{Command: os.Args[0], Args: []string{"-test.run=TestWorkerHelper"}, Timeout: time.Second, Classpath: []string{"one" + string(os.PathListSeparator) + "two"}})
 	result, err := worker.Analyze(context.Background(), application.AnalysisInput{ProjectID: "p", RevisionID: "r", Root: `C:\a project`, Artifacts: []domain.Artifact{{ID: "a", Path: "source with spaces.java", Language: "java"}}, Sources: map[string][]byte{"source with spaces.java": []byte("class Example {}")}})
 	if err != nil {
 		t.Fatal(err)
@@ -39,8 +39,9 @@ func TestWorkerHelper(t *testing.T) {
 		return
 	}
 	var input struct {
-		Root    string            `json:"root"`
-		Sources map[string]string `json:"sources"`
+		Root      string            `json:"root"`
+		Sources   map[string]string `json:"sources"`
+		Classpath []string          `json:"classpath"`
 	}
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
 		os.Exit(2)
@@ -51,6 +52,9 @@ func TestWorkerHelper(t *testing.T) {
 	}
 	if input.Sources["source with spaces.java"] != "class Example {}" {
 		os.Exit(3)
+	}
+	if input.Classpath[0] != "one"+string(os.PathListSeparator)+"two" {
+		os.Exit(4)
 	}
 	fmt.Fprintln(os.Stdout, `{"symbols":[{"id":"s","path":"source with spaces.java"}],"relations":[],"evidence":[],"diagnostics":[]}`)
 	os.Exit(0)
