@@ -16,6 +16,7 @@ public final class AgentTransport {
     static final int DEFAULT_QUEUE_CAPACITY = 4096;
     static final int DEFAULT_TRACE_STATE_CAPACITY = 4096;
     private static final String PROCESS_NONCE = TraceContext.hex(8);
+    private static final AtomicLong NEXT_TRACE_EPOCH = new AtomicLong();
     private static final long HEARTBEAT_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(2L);
     private static final long CAPACITY_DIAGNOSTIC_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1L);
 
@@ -93,7 +94,7 @@ public final class AgentTransport {
                 recordCapacityRejection();
                 return null;
             }
-            String producerId = processProducerId;
+            String producerId = processProducerId + "-" + NEXT_TRACE_EPOCH.incrementAndGet();
             state = new TraceState(traceId, producerId);
             state.activeContexts = 1;
             traceStates.put(traceId, state);

@@ -39,10 +39,10 @@ class AgentFailureTest {
         AgentTransport.TraceState stateB = transport.acquireTrace(traceB,"producer-test");
         try {
             assertTrue(transport.offer(event(transport,stateA,"initial")));
-            awaitCount(bodies,1);
+            awaitBody(bodies,"\"kind\":\"initial\"");
             online.set(true);
             assertTrue(transport.offer(event(transport,stateB,"recovery")));
-            awaitCount(bodies,3);
+            awaitBody(bodies,"\"kind\":\"agent.loss\"");
             String loss=bodies.stream().filter(s->s.contains("\"kind\":\"agent.loss\"")).findFirst().orElse("");
             assertTrue(loss.contains("\"traceId\":\""+traceA+"\""),bodies.toString());
             assertTrue(loss.contains("\"producerId\":\""+stateA.producerId+"\""),bodies.toString());
@@ -62,7 +62,7 @@ class AgentFailureTest {
         AgentTransport.TraceState state = transport.acquireTrace("cccccccccccccccccccccccccccccccc","producer-test");
         try {
             assertTrue(transport.offer(event(transport,state,"offline")));
-            awaitCount(bodies,1);
+            awaitBody(bodies,"\"kind\":\"offline\"");
             online.set(true);
             assertTrue(transport.offer(event(transport,state,"recovery")));
             assertTrue(emptySnapshotPosted.await(4,TimeUnit.SECONDS),"loss report did not reach its post-send accounting boundary");
@@ -71,11 +71,12 @@ class AgentFailureTest {
             assertFalse(transport.offer(event(transport,state,"overflow-during-recovery")));
         } finally { allowFinalize.countDown(); }
         try {
-            awaitCount(bodies,6);
+            awaitMatchingCount(bodies,"\"kind\":\"agent.loss\"",2);
+            awaitBody(bodies,"\"kind\":\"queued-2\"");
             long lossReports=bodies.stream().filter(s->s.contains("\"kind\":\"agent.loss\"")&&s.contains("\"traceId\":\"cccccccccccccccccccccccccccccccc\"")&&s.contains("\"agent.dropped_count\":\"1\"")).count();
             assertEquals(2,lossReports,"the overflow concurrent with successful loss delivery must remain in the state and be reported");
             transport.releaseTrace(state);
-            assertEquals(0,transport.traceStateCountForTesting(),"settled trace state must retire after events and loss reports complete");
+            awaitTraceRetirement(transport);
         } finally { transport.closeForTesting(); transport.releaseTrace(state); server.stop(0); }
     }
 
@@ -149,9 +150,13 @@ class AgentFailureTest {
 
     private static HttpServer server(AtomicBoolean online,List<String> bodies,CountDownLatch entered,CountDownLatch release)throws Exception {
         HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
-        server.createContext("/v1/events",exchange->{ByteArrayOutputStream body=new ByteArrayOutputStream();byte[] chunk=new byte[1024];for(int n;(n=exchange.getRequestBody().read(chunk))>=0;)body.write(chunk,0,n);String text=new String(body.toByteArray(),"UTF-8");bodies.add(text);if(entered!=null&&text.contains("agent.loss")){entered.countDown();try{release.await(3,TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}}exchange.sendResponseHeaders(online.get()?200:503,-1);exchange.close();});
+        server.createContext("/v1/events",exchange->{ByteArrayOutputStream body=new ByteArrayOutputStream();byte[] chunk=new byte[1024];for(int n;(n=exchange.getRequestBody().read(chunk))>=0;)body.write(chunk,0,n);String text=new String(body.toByteArray(),"UTF-8");boolean accepted=online.get();if(entered!=null&&text.contains("agent.loss")){entered.countDown();try{release.await(3,TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}}exchange.sendResponseHeaders(accepted?200:503,-1);exchange.close();bodies.add(text);});
         server.start();return server;
     }
 
     private static void awaitCount(List<?> values,int count) throws InterruptedException {long deadline=System.currentTimeMillis()+5000;while(values.size()<count&&System.currentTimeMillis()<deadline)Thread.sleep(10);assertTrue(values.size()>=count,"timed out waiting for local transport requests");}
+    private static void awaitBody(List<String> bodies,String fragment) throws InterruptedException {awaitMatchingCount(bodies,fragment,1);}
+    private static void awaitMatchingCount(List<String> bodies,String fragment,long count) throws InterruptedException {long deadline=System.currentTimeMillis()+5000;while(matchingCount(bodies,fragment)<count&&System.currentTimeMillis()<deadline)Thread.sleep(10);assertTrue(matchingCount(bodies,fragment)>=count,"timed out waiting for "+count+" requests containing "+fragment);}
+    private static long matchingCount(List<String> bodies,String fragment) {synchronized(bodies){return bodies.stream().filter(s->s.contains(fragment)).count();}}
+    private static void awaitTraceRetirement(AgentTransport transport) throws InterruptedException {long deadline=System.currentTimeMillis()+5000;while(transport.traceStateCountForTesting()!=0&&System.currentTimeMillis()<deadline)Thread.sleep(10);assertEquals(0,transport.traceStateCountForTesting(),"settled trace state must retire after events and loss reports complete");}
 }
