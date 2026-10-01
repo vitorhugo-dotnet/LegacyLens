@@ -9,6 +9,7 @@ export interface NetworkEffect {
   spanId?: string;
   traceparent?: string;
   frames: SourceFrame[];
+  stackGap?: 'ASYNC_BOUNDARY';
 }
 
 function linked(context: PageCaptureContext, interaction?: InteractionContext): interaction is InteractionContext {
@@ -40,7 +41,7 @@ export function installNetworkCapture(context: PageCaptureContext): () => void {
   const originalOpen = xhrPrototype?.open;
   const originalSet = xhrPrototype?.setRequestHeader;
   const originalSend = xhrPrototype?.send;
-  const xhrState = new WeakMap<XMLHttpRequest, { url: string; interaction: InteractionContext | undefined; headers: Map<string, string> }>();
+  const xhrState = new WeakMap<XMLHttpRequest, { url: string; headers: Map<string, string> }>();
   let enabled = true;
 
   const wrappedFetch: typeof fetch = function (this: typeof globalThis, input, init) {
@@ -49,10 +50,11 @@ export function installNetworkCapture(context: PageCaptureContext): () => void {
     const url = input instanceof Request ? input.url : String(input);
     if (!sameOrigin(url, context.origin)) return Reflect.apply(originalFetch, this, [input, init]);
     const frames = parseStack(new Error().stack ?? '');
+    const stackGap = interaction.asyncBoundary ? 'ASYNC_BOUNDARY' as const : undefined;
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     if (headers.has('traceparent')) {
       if (!alreadyLinked(headers.get('traceparent') ?? '', context.traceId))
-        report(context, { transport: 'fetch', source: interaction.source, propagation: 'attempted', frames });
+        report(context, { transport: 'fetch', source: interaction.source, propagation: 'attempted', frames, ...(stackGap ? { stackGap } : {}) });
       return Reflect.apply(originalFetch, this, [input, init]);
     }
     let identity: ReturnType<typeof traceparent>;
@@ -61,14 +63,14 @@ export function installNetworkCapture(context: PageCaptureContext): () => void {
     headers.set('traceparent', identity.value);
     const result = Reflect.apply(originalFetch, this, [input, { ...init, headers }]);
     report(context, { transport: 'fetch', source: interaction.source, propagation: 'propagated', spanId: identity.spanId,
-      traceparent: identity.value, frames });
+      traceparent: identity.value, frames, ...(stackGap ? { stackGap } : {}) });
     return result;
   };
   globalThis.fetch = wrappedFetch;
 
   const wrappedOpen: typeof XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, method: string, url: string | URL, ...args: any[]) {
     const result = Reflect.apply(originalOpen, this, [method, url, ...args]);
-    if (enabled) xhrState.set(this, { url: String(url), interaction: currentInteraction(), headers: new Map() });
+    if (enabled) xhrState.set(this, { url: String(url), headers: new Map() });
     return result;
   };
   const wrappedSet: typeof XMLHttpRequest.prototype.setRequestHeader = function (this: XMLHttpRequest, name, value) {
@@ -83,26 +85,27 @@ export function installNetworkCapture(context: PageCaptureContext): () => void {
   };
   const wrappedSend: typeof XMLHttpRequest.prototype.send = function (this: XMLHttpRequest, ...args) {
     const state = xhrState.get(this);
-    const interaction = currentInteraction() ?? state?.interaction;
+    const interaction = currentInteraction();
     if (!enabled || !state || !linked(context, interaction) || !sameOrigin(state.url, context.origin))
       return Reflect.apply(originalSend, this, args);
     const frames = parseStack(new Error().stack ?? '');
+    const stackGap = interaction.asyncBoundary ? 'ASYNC_BOUNDARY' as const : undefined;
     if (state.headers.has('traceparent')) {
       if (!alreadyLinked(state.headers.get('traceparent') ?? '', context.traceId))
-        report(context, { transport: 'xhr', source: interaction.source, propagation: 'attempted', frames });
+        report(context, { transport: 'xhr', source: interaction.source, propagation: 'attempted', frames, ...(stackGap ? { stackGap } : {}) });
       return Reflect.apply(originalSend, this, args);
     }
     let identity: ReturnType<typeof traceparent>;
     try { identity = traceparent(context); } catch { return Reflect.apply(originalSend, this, args); }
     if (!identity) return Reflect.apply(originalSend, this, args);
     try { Reflect.apply(originalSet, this, ['traceparent', identity.value]); }
-    catch { report(context, { transport: 'xhr', source: interaction.source, propagation: 'attempted', frames });
+    catch { report(context, { transport: 'xhr', source: interaction.source, propagation: 'attempted', frames, ...(stackGap ? { stackGap } : {}) });
       return Reflect.apply(originalSend, this, args); }
     state.headers.set('traceparent', identity.value);
     const result = Reflect.apply(originalSend, this, args);
     if (state.headers.get('traceparent') === identity.value)
       report(context, { transport: 'xhr', source: interaction.source, propagation: 'propagated', spanId: identity.spanId,
-        traceparent: identity.value, frames });
+        traceparent: identity.value, frames, ...(stackGap ? { stackGap } : {}) });
     return result;
   };
   if (xhrPrototype) {

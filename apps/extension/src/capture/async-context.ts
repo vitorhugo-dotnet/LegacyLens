@@ -2,6 +2,7 @@ export interface InteractionContext {
   source: string;
   origin: string;
   traceId: string;
+  asyncBoundary?: true;
 }
 
 let active: InteractionContext | undefined;
@@ -44,7 +45,8 @@ export function installAsyncContextCapture(): () => void {
   const records: Array<{ target: EventTarget; type: string; original: EventListenerOrEventListenerObject; wrapped: EventListener; options: boolean | AddEventListenerOptions | undefined; capture: boolean; abort?: EventListener }> = [];
   let enabled = true;
 
-  const callback = <T extends (...args: any[]) => any>(fn: T): T => active && enabled ? bindInteraction(fn, active) : fn;
+  const callback = <T extends (...args: any[]) => any>(fn: T): T => active && enabled
+    ? bindInteraction(fn, { ...active, asyncBoundary: true }) : fn;
   globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: any[]) =>
     Reflect.apply(originalTimeout, globalThis, [typeof handler === 'function' ? callback(handler as (...args: any[]) => any) : handler, timeout, ...args])) as typeof setTimeout;
   globalThis.setInterval = ((handler: TimerHandler, timeout?: number, ...args: any[]) =>
@@ -61,7 +63,6 @@ export function installAsyncContextCapture(): () => void {
     if (typeof options === 'object' && options?.signal?.aborted) return Reflect.apply(originalAdd, this, [type, listener, options]);
     const capture = typeof options === 'boolean' ? options : !!options?.capture;
     if (records.some((item) => item.target === this && item.type === type && item.original === listener && item.capture === capture)) return;
-    const bound = active;
     const wrapped: EventListener = function (this: EventTarget, event: Event) {
       if (typeof options === 'object' && options?.once) {
         const index = records.indexOf(record);
@@ -70,7 +71,8 @@ export function installAsyncContextCapture(): () => void {
       }
       const selected = enabled && type === 'click' && armed && typeof Element !== 'undefined' && event.target instanceof Element
         && event.target.closest('[id]')?.id === armed.source ? armed : undefined;
-      const context = enabled ? bound ?? selected : undefined;
+      // Registration alone does not make a later, independently dispatched event a child.
+      const context = enabled ? selected ?? active : undefined;
       const invoke = () => typeof listener === 'function'
         ? Reflect.apply(listener, this, [event]) : Reflect.apply(listener.handleEvent, listener, [event]);
       return context ? withInteraction(context, invoke) : invoke();

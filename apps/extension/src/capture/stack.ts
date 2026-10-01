@@ -20,3 +20,21 @@ export function parseStack(stack: string): SourceFrame[] {
   }
   return frames.length ? frames.reverse() : [{ observation: 'gap', reason: 'STACK_UNAVAILABLE' }];
 }
+
+/** Reduce untrusted page frames to bounded, relative JavaScript identity and explicit gaps. */
+export function toStackMetadata(frames: unknown, asyncGap?: 'ASYNC_BOUNDARY'): { frameChain?: string; stackGap?: string } {
+  let frameChain = '';
+  try {
+    if (Array.isArray(frames)) frameChain = frames.slice(0, 8).map((frame: SourceFrame) => {
+      if (frame?.observation !== 'stack' || typeof frame.functionName !== 'string' || typeof frame.source !== 'string') return '';
+      const name = /^[\w.$<> -]{1,64}$/.test(frame.functionName) ? frame.functionName : '';
+      const file = frame.source.split('/').at(-1) ?? '';
+      if (!name || !/^[a-zA-Z][\w.-]{0,63}\.js$/.test(file) || !Number.isSafeInteger(frame.line) || frame.line < 1) return '';
+      return `${name}@${file}:${frame.line}`;
+    }).filter(Boolean).join('>');
+  } catch { frameChain = ''; }
+  if (frameChain.length > 256) frameChain = '';
+  const stackGap = asyncGap && !frameChain ? 'ASYNC_BOUNDARY,STACK_UNAVAILABLE'
+    : asyncGap ?? (!frameChain ? 'STACK_UNAVAILABLE' : undefined);
+  return { ...(frameChain ? { frameChain } : {}), ...(stackGap ? { stackGap } : {}) };
+}

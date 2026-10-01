@@ -52,6 +52,26 @@ describe('async interaction context', () => {
     } finally { uninstall(); globalThis.Element = previousElement; }
   });
 
+  it('uses the triggering click B for a listener registered during A', async () => {
+    const previousElement = globalThis.Element;
+    class FakeElement extends EventTarget { id = 'save'; closest() { return { id: this.id }; } }
+    globalThis.Element = FakeElement as unknown as typeof Element;
+    const uninstall = installAsyncContextCapture();
+    try {
+      const button = new FakeElement();
+      const seen: string[] = [];
+      const listener = () => seen.push(currentInteraction()?.source ?? 'unlinked');
+      withInteraction(interaction('A'), () => button.addEventListener('click', listener));
+      button.id = 'B';
+      armInteraction(interaction('B'));
+      button.dispatchEvent(new Event('click'));
+      await Promise.resolve();
+      button.dispatchEvent(new Event('click'));
+      button.removeEventListener('click', listener);
+      expect(seen).toEqual(['B', 'unlinked']);
+    } finally { uninstall(); globalThis.Element = previousElement; }
+  });
+
   it('keeps listener identity for removal, capture options, once and abort', () => {
     const uninstall = installAsyncContextCapture();
     try {
@@ -60,16 +80,17 @@ describe('async interaction context', () => {
       const listener = () => seen.push(currentInteraction()?.source ?? 'unlinked');
       withInteraction(interaction('A'), () => target.addEventListener('save', listener, { capture: true }));
       target.dispatchEvent(new Event('save'));
+      withInteraction(interaction('A'), () => target.dispatchEvent(new Event('save')));
       target.removeEventListener('save', listener, { capture: true });
       target.dispatchEvent(new Event('save'));
       const abort = new AbortController();
       withInteraction(interaction('B'), () => target.addEventListener('save', listener, { once: true, signal: abort.signal }));
-      target.dispatchEvent(new Event('save'));
+      withInteraction(interaction('B'), () => target.dispatchEvent(new Event('save')));
       target.dispatchEvent(new Event('save'));
       withInteraction(interaction('B'), () => target.addEventListener('save', listener, { once: true }));
-      target.dispatchEvent(new Event('save'));
+      withInteraction(interaction('B'), () => target.dispatchEvent(new Event('save')));
       abort.abort();
-      expect(seen).toEqual(['A', 'B', 'B']);
+      expect(seen).toEqual(['unlinked', 'A', 'B', 'B']);
     } finally { uninstall(); }
   });
 

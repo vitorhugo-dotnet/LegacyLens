@@ -1,6 +1,7 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
 import type { ProjectListResult, CaptureSession } from '@legacylens/contracts/src/protocol.ts';
 import { chooseElement } from '../src/capture/selection.ts';
+import { toStackMetadata } from '../src/capture/stack.ts';
 
 type Reply<T> = T | { error: string };
 async function ask<T>(message: object): Promise<T> {
@@ -87,24 +88,17 @@ export default defineContentScript({
     });
     window.addEventListener('legacylens:network', (event) => {
       const detail = (event as CustomEvent).detail as { nonce?: string; source?: string; transport?: string; propagation?: string;
-        traceparent?: string; spanId?: string; frames?: Array<{ observation?: string; functionName?: string; source?: string; line?: number; column?: number }> };
+        traceparent?: string; spanId?: string; frames?: unknown; stackGap?: string };
       if (!session || !clickEventId || detail?.nonce !== nonce || detail.source !== selectedSource) return;
       if (detail.transport !== 'fetch' && detail.transport !== 'xhr') return;
       const propagated = detail.propagation === 'propagated' && typeof detail.spanId === 'string'
         && /^[a-f0-9]{16}$/i.test(detail.spanId) && !/^0+$/.test(detail.spanId)
         && detail.traceparent === `00-${session.id}-${detail.spanId}-01`;
       if (!propagated && detail.propagation !== 'attempted') return;
-      const frames = Array.isArray(detail.frames) ? detail.frames.slice(0, 8) : [];
-      const safeFrames = frames.map((frame) => {
-        if (frame.observation !== 'stack' || typeof frame.functionName !== 'string' || typeof frame.source !== 'string') return '';
-        const name = /^[\w.$<> -]{1,64}$/.test(frame.functionName) ? frame.functionName : '';
-        const file = frame.source.split('/').at(-1) ?? '';
-        if (!name || !/^[a-zA-Z][\w.-]{0,63}\.js$/.test(file) || !Number.isSafeInteger(frame.line) || frame.line! < 1) return '';
-        return `${name}@${file}:${frame.line}`;
-      }).filter(Boolean).join('>');
+      const stack = toStackMetadata(detail.frames, detail.stackGap === 'ASYNC_BOUNDARY' ? 'ASYNC_BOUNDARY' : undefined);
       const metadata = { source: detail.source, transport: detail.transport,
         ...(propagated ? { spanId: detail.spanId } : {}),
-        ...(safeFrames && safeFrames.length <= 256 ? { frameChain: safeFrames } : { stackGap: 'STACK_UNAVAILABLE' }) };
+        ...stack };
       void ask({ type: 'capture.event', sessionId: session.id, kind: propagated ? 'browser.network' : 'browser.propagation_attempt',
         parentEventId: clickEventId, metadata }).catch(() => {
         const status = document.querySelector('[data-legacylens-ui] [role="status"]');
