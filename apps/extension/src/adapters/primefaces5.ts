@@ -120,7 +120,7 @@ export class PrimeFacesAdapter {
   select(jsfClientId: string): void {
     if (!jsfClientId) return;
     this.selected = jsfClientId;
-    queueMicrotask(() => { if (this.selected === jsfClientId) this.selected = undefined; });
+    setTimeout(() => { if (this.selected === jsfClientId) this.selected = undefined; }, 0);
   }
 
   observeAjax(action: AjaxAction): AjaxAction {

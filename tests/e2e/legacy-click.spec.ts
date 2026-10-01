@@ -80,6 +80,10 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
     expect(dom.events.items.some((event)=>event.kind==='jsf.click')).toBe(true);
     expect(dom.events.items.filter((event)=>event.kind==='http.server'||event.kind.startsWith('method.')||event.kind.startsWith('db.')),'DOM-only action must have zero Java events').toHaveLength(0);
     await page.getByRole('button',{name:'Stop capture'}).click();
+    await expect.poll(activeTrace,{timeout:15_000,message:'first capture did not stop'}).toBeUndefined();
+    await page.evaluate(() => {
+      (window as any).__legacyLensBaseline = { fetch, handle: (window as any).PrimeFaces.ajax.Request.handle };
+    });
 
     await page.locator('#orderForm\\:note').fill('fixture-private-order-value');
     const observedRequests:{parent?:string}[]=[];
@@ -87,6 +91,11 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
     await page.getByRole('button',{name:'Capture next interaction'}).click();
     await expect.poll(activeTrace,{timeout:15_000,message:'FIXTURE_SETUP: second native capture did not start'}).toMatch(/^[0-9a-f]{32}$/);
     const trace = await activeTrace();
+    expect(trace,'second capture must have a new trace ID').not.toBe(domTrace);
+    await expect.poll(() => page.evaluate(() => ({
+      fetch: fetch !== (window as any).__legacyLensBaseline.fetch,
+      primeFaces: (window as any).PrimeFaces.ajax.Request.handle !== (window as any).__legacyLensBaseline.handle,
+    })),{timeout:5_000}).toEqual({fetch:true,primeFaces:true});
     await page.locator('#orderForm\\:saveOrder').click();
     await expect(page.locator('#orderForm\\:message')).toHaveText('Order saved',{timeout:15_000});
     await expect.poll(async()=> {
@@ -97,15 +106,28 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
         kinds:[...new Set(events.map((event)=>event.kind))].sort(),
         browserSpans:events.filter((event)=>event.kind==='browser.network'||event.kind==='primefaces.ajax').map((event)=>event.metadata?.spanId).filter(Boolean).sort(),
         serverSpans:events.filter((event)=>event.kind==='http.server').map((event)=>event.metadata?.['http.request_span']).filter(Boolean).sort(),
+        agentLoss:events.filter((event)=>event.kind==='agent.loss').map((event)=>event.metadata?.['agent.dropped_count']),
         observedTraceparent:observedRequests.map((request)=>Boolean(request.parent)),
         pageEvents:await page.evaluate(()=>((window as any).__legacyLensProbe as unknown[]).slice(-12)),
       });
     },{timeout:15_000}).toMatch(/"httpServer":2/);
+    await expect.poll(async()=> {
+      const pending=await investigation(trace);
+      const events=pending.events.items;
+      return {
+        methods:events.filter((event)=>event.kind==='method.start').map((event)=>event.metadata?.['code.method']).sort(),
+        insert:events.some((event)=>event.kind==='method.start'&&event.metadata?.['code.method']==='insert'),
+        update:events.some((event)=>event.kind==='db.update'&&event.metadata?.sql==='INSERT INTO orders (note) VALUES (?)'),
+        losses:events.filter((event)=>event.kind==='agent.loss').map((event)=>event.metadata?.['agent.dropped_count']),
+      };
+    },{timeout:30_000}).toMatchObject({insert:true,update:true});
     await page.getByRole('button',{name:'Stop capture'}).click();
+    await expect.poll(activeTrace,{timeout:15_000,message:'second capture did not stop'}).toBeUndefined();
     const result = await investigation(trace);
     expect(result.agentStatus.state).toBe('online');
     expect(result.diagnostics.items.some((item)=>item.id===result.agentStatus.evidenceDiagnosticId&&item.code==='agent.heartbeat')).toBe(true);
     const events=result.events.items;
+    expect(events.filter((event)=>event.kind==='agent.loss'),'Java agent must deliver the captured flow without loss').toHaveLength(0);
     const requests=events.filter((event)=>event.kind==='browser.network'||event.kind==='primefaces.ajax');
     const servers=events.filter((event)=>event.kind==='http.server');
     const spans=new Set(requests.map((event)=>event.metadata?.spanId).filter(Boolean));

@@ -19,6 +19,7 @@ public final class AgentTransport {
     private static final AtomicLong NEXT_TRACE_EPOCH = new AtomicLong();
     private static final long HEARTBEAT_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(2L);
     private static final long CAPACITY_DIAGNOSTIC_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1L);
+    private static final int EVENT_READ_TIMEOUT_MILLIS = 2000;
 
     private static final class PendingEvent {
         final Event event;
@@ -300,7 +301,7 @@ public final class AgentTransport {
 
     private boolean send(Event event) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(config.endpoint).openConnection();
-        connection.setConnectTimeout(250); connection.setReadTimeout(250); connection.setInstanceFollowRedirects(false);
+        connection.setConnectTimeout(250); connection.setReadTimeout(EVENT_READ_TIMEOUT_MILLIS); connection.setInstanceFollowRedirects(false);
         connection.setRequestMethod("POST"); connection.setDoOutput(true);
         connection.setRequestProperty("Authorization", "Bearer " + config.token); connection.setRequestProperty("Content-Type", "application/json");
         String body = "{\"protocolVersion\":1,\"requestId\":" + Event.q(event.eventId) + ",\"command\":\"trace.ingest\",\"payload\":{\"projectId\":" + Event.q(event.projectId) + ",\"events\":[" + event.toJson() + "]}}";

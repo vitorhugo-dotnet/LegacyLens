@@ -36,9 +36,35 @@ describe('PrimeFacesAdapter', () => {
     const adapter = new PrimeFacesAdapter();
     adapter.install({ origin: 'https://app.example', traceId: 'a'.repeat(32), nextSpanId: () => 'b'.repeat(16), onAjax() {} });
     adapter.select('form:save');
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const polling = adapter.observeAjax({ source: 'form:save', url: 'https://app.example/view', headers: {}, propagation: 'unlinked' });
     expect(polling.traceparent).toBeUndefined();
+  });
+
+  it('links the selected invocation after a cross-world microtask checkpoint', async () => {
+    let prefilter: ((options: { url?: string; data?: unknown; headers?: Record<string, string>; xhr?: () => FakeXHR }) => void) | undefined;
+    class FakeXHR {
+      headers: Record<string, string> = {};
+      setRequestHeader(name: string, value: string) { this.headers[name.toLowerCase()] = value; }
+      send() { return 'sent'; }
+    }
+    const handle = () => {
+      const options = { url: 'https://app.example/view', data: 'javax.faces.source=form%3Asave', headers: {} as Record<string, string>, xhr: () => new FakeXHR() };
+      prefilter!(options);
+      const xhr = options.xhr();
+      for (const [name, value] of Object.entries(options.headers)) xhr.setRequestHeader(name, value);
+      xhr.send();
+      return xhr;
+    };
+    Object.assign(globalThis, { PrimeFaces: { ajax: { Request: { handle } } }, jQuery: { ajaxPrefilter(callback: typeof prefilter) { prefilter = callback; } } });
+    const adapter = new PrimeFacesAdapter();
+    const uninstall = adapter.install({ origin: 'https://app.example', traceId: 'a'.repeat(32), nextSpanId: () => 'b'.repeat(16), onAjax() {} });
+    try {
+      adapter.select('form:save');
+      await Promise.resolve();
+      const xhr = (globalThis as any).PrimeFaces.ajax.Request.handle({ source: 'form:save' }) as FakeXHR;
+      expect(xhr.headers.traceparent).toBe('00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01');
+    } finally { uninstall(); }
   });
 
   it('leaves a jQuery transport outside the PrimeFaces invocation unchanged', () => {

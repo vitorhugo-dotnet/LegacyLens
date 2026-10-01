@@ -15,6 +15,31 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AgentFailureTest {
+    @Test void slowSuccessfulLocalIngestDoesNotLoseTheEvent() throws Exception {
+        CountDownLatch responded = new CountDownLatch(1);
+        List<String> bodies = Collections.synchronizedList(new ArrayList<String>());
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/events", exchange -> {
+            ByteArrayOutputStream body = new ByteArrayOutputStream();
+            try {
+                for (int next; (next = exchange.getRequestBody().read()) != -1; ) body.write(next);
+                String text = new String(body.toByteArray(), "UTF-8");
+                if (text.contains("trace.ingest")) { bodies.add(text); Thread.sleep(400); }
+                exchange.sendResponseHeaders(200, -1);
+            } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+            finally { exchange.close(); if (new String(body.toByteArray(), "UTF-8").contains("trace.ingest")) responded.countDown(); }
+        });
+        server.start();
+        AgentTransport transport = AgentTransport.start(AgentConfig.forTesting("sample.app", endpoint(server)));
+        AgentTransport.TraceState state = transport.acquireTrace("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "producer-test");
+        try {
+            assertTrue(transport.offer(event(transport, state, "http.server")));
+            assertTrue(responded.await(3, TimeUnit.SECONDS));
+            Thread.sleep(500);
+            assertEquals(0, transport.droppedForTesting(), "successful local ingest must not be reported as lost");
+            assertFalse(bodies.stream().anyMatch(body -> body.contains("agent.loss")), "late successful response must not create a loss report");
+        } finally { transport.closeForTesting(); transport.releaseTrace(state); server.stop(0); }
+    }
     @Test void offlineAndFullQueueDoNotBlockApplicationOffers() throws Exception {
         AgentTransport transport = AgentTransport.forTesting(4096);
         AgentTransport.TraceState state = transport.acquireTrace("0123456789abcdef0123456789abcdef", "producer-test");

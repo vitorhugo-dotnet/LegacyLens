@@ -32,6 +32,26 @@ describe('network capture', () => {
     } finally { uninstall(); globalThis.fetch = original; }
   });
 
+  it('links an inline fetch in the selected click task but leaves the next task poll unlinked', async () => {
+    const effects: NetworkEffect[] = [];
+    const calls: Request[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(new Request(input, init));
+      return new Response('ok');
+    };
+    const stopNetwork = installNetworkCapture(context(effects));
+    try {
+      armInteraction(interaction);
+      await Promise.resolve();
+      await fetch('https://app.example/save');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await fetch('https://app.example/poll');
+      expect(calls.map((call) => call.headers.has('traceparent'))).toEqual([true, false]);
+      expect(effects).toEqual([expect.objectContaining({ source: 'save', transport: 'fetch', propagation: 'propagated' })]);
+    } finally { stopNetwork(); globalThis.fetch = original; }
+  });
+
   it('leaves unlinked, cross-origin and existing traceparent requests untouched', async () => {
     const effects: NetworkEffect[] = [];
     const calls: Request[] = [];

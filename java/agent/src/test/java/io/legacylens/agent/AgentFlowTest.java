@@ -11,6 +11,12 @@ import sample.app.SampleApplication;
 import javax.servlet.fake.FakeServlet;
 
 class AgentFlowTest {
+    @Test void configuredLegacyLensPackageIsEligibleForMethodInstrumentation() {
+        java.util.Set<String> packages = java.util.Collections.singleton("io.legacylens.fixture");
+        assertTrue(LegacyLensAgent.instrumentableApplicationType("io.legacylens.fixture.OrderService", packages));
+        assertFalse(LegacyLensAgent.instrumentableApplicationType("io.legacylens.agent.LegacyLensAgent", packages));
+        assertFalse(LegacyLensAgent.instrumentableApplicationType("io.legacylens.fixtureother.OrderService", packages));
+    }
     @Test void adviceTransformsLoadedApplicationMethodAndCapturesExceptionWithoutMessage() throws Exception {
         AgentTransport transport = AgentTransport.forTesting(16);
         LegacyLensAgent.installForTesting(ByteBuddyAgent.install(), transport, AgentConfig.forTesting("sample.app"));

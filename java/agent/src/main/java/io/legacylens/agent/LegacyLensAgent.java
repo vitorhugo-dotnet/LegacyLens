@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -62,7 +63,7 @@ public final class LegacyLensAgent {
 
     private static void install(Instrumentation instrumentation, final AgentConfig agentConfig) throws Exception {
         installBootstrapBridge(instrumentation);
-        new AgentBuilder.Default().ignore(nameStartsWith("io.legacylens.").or(nameStartsWith("net.bytebuddy.")).or(nameStartsWith("java.")))
+        new AgentBuilder.Default().ignore(nameStartsWith("io.legacylens.agent.").or(nameStartsWith("net.bytebuddy.")).or(nameStartsWith("java.")))
           .type(hasSuperType(named("javax.servlet.Servlet")).or(hasSuperType(named("jakarta.servlet.Servlet"))))
           .transform((builder, type, loader, module, protectionDomain) -> builder.visit(Advice.to(ServletAdvice.class).on(named("service").and(takesArguments(2)))))
           .type(nameStartsWith("com.mysql.").or(nameStartsWith("org.mariadb.")))
@@ -73,13 +74,18 @@ public final class LegacyLensAgent {
           .type(new net.bytebuddy.matcher.ElementMatcher<net.bytebuddy.description.type.TypeDescription>() {
               public boolean matches(net.bytebuddy.description.type.TypeDescription type) {
                   String name = type.getName();
-                  if (name.startsWith("io.legacylens.") || name.startsWith("java.") || name.startsWith("javax.") || name.startsWith("jakarta.") || name.startsWith("net.bytebuddy.")) return false;
-                  for (String allowed : agentConfig.packages) if (name.equals(allowed) || name.startsWith(allowed + ".")) return true;
-                  return false;
+                  return instrumentableApplicationType(name, agentConfig.packages);
               }
           })
           .transform((builder, type, loader, module, protectionDomain) -> builder.visit(Advice.to(MethodAdvice.class).on(isMethod().and(not(isAbstract())).and(not(isNative())))))
           .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION).installOn(instrumentation);
+    }
+
+    static boolean instrumentableApplicationType(String name, Set<String> packages) {
+        if (name.startsWith("io.legacylens.agent.") || name.startsWith("java.") || name.startsWith("javax.")
+                || name.startsWith("jakarta.") || name.startsWith("net.bytebuddy.")) return false;
+        for (String allowed : packages) if (name.equals(allowed) || name.startsWith(allowed + ".")) return true;
+        return false;
     }
 
     private static synchronized void installBootstrapBridge(Instrumentation instrumentation) throws Exception {

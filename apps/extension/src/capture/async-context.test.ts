@@ -46,9 +46,25 @@ describe('async interaction context', () => {
       button.addEventListener('click', () => seen.push(currentInteraction()?.source ?? 'unlinked'));
       armInteraction(interaction('save'));
       button.dispatchEvent(new Event('click'));
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
       button.dispatchEvent(new Event('click'));
       expect(seen).toEqual(['save', 'unlinked']);
+    } finally { uninstall(); globalThis.Element = previousElement; }
+  });
+
+  it('keeps the selected click armed across a microtask checkpoint during the same click task', async () => {
+    const previousElement = globalThis.Element;
+    class FakeElement extends EventTarget { id = 'save'; closest() { return { id: this.id }; } }
+    globalThis.Element = FakeElement as unknown as typeof Element;
+    const uninstall = installAsyncContextCapture();
+    try {
+      const button = new FakeElement();
+      let observed = '';
+      button.addEventListener('click', () => { observed = currentInteraction()?.source ?? 'unlinked'; });
+      armInteraction(interaction('save'));
+      await Promise.resolve();
+      button.dispatchEvent(new Event('click'));
+      expect(observed).toBe('save');
     } finally { uninstall(); globalThis.Element = previousElement; }
   });
 
@@ -65,7 +81,7 @@ describe('async interaction context', () => {
       button.id = 'B';
       armInteraction(interaction('B'));
       button.dispatchEvent(new Event('click'));
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
       button.dispatchEvent(new Event('click'));
       button.removeEventListener('click', listener);
       expect(seen).toEqual(['B', 'unlinked']);

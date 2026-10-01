@@ -2,6 +2,8 @@ package application
 
 import (
  "errors"
+ "strconv"
+ "strings"
  "sync"
  "time"
 
@@ -38,7 +40,7 @@ func (p *AgentPresence) Status(project domain.ID, expected []domain.ID) AgentSta
   if key.project != project { continue }
   if len(expected) > 0 {
    found := false
-   for _, process := range expected { if process == key.process { found = true; break } }
+   for _, process := range expected { if process == key.process || traceEpochOfProcess(process, key.process) { found = true; break } }
    if !found { continue }
   }
   if at.After(latest) { latest = at }
@@ -47,6 +49,14 @@ func (p *AgentPresence) Status(project domain.ID, expected []domain.ID) AgentSta
  state := "online"
  if p.now().UTC().Sub(latest) > p.ttl { state = "offline" }
  return AgentStatus{State:state,EvidenceDiagnosticID:domain.ID("agent.presence."+state)}
+}
+
+func traceEpochOfProcess(producer, process domain.ID) bool {
+ suffix, ok := strings.CutPrefix(string(producer), string(process)+"-")
+ if !ok || suffix == "" { return false }
+ for _, digit := range suffix { if digit < '0' || digit > '9' { return false } }
+ epoch, err := strconv.ParseUint(suffix, 10, 64)
+ return err == nil && epoch > 0
 }
 
 func (p *AgentPresence) Diagnostic(status AgentStatus) domain.Diagnostic {

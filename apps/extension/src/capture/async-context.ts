@@ -7,8 +7,9 @@ export interface InteractionContext {
 
 let active: InteractionContext | undefined;
 let armed: InteractionContext | undefined;
+let observing = 0;
 
-export function currentInteraction(): InteractionContext | undefined { return active; }
+export function currentInteraction(): InteractionContext | undefined { return observing ? undefined : active ?? armed; }
 
 export function withInteraction<T>(context: InteractionContext, fn: () => T): T {
   const previous = active;
@@ -19,7 +20,8 @@ export function withInteraction<T>(context: InteractionContext, fn: () => T): T 
 export function withoutInteraction<T>(fn: () => T): T {
   const previous = active;
   active = undefined;
-  try { return fn(); } finally { active = previous; }
+  observing++;
+  try { return fn(); } finally { observing--; active = previous; }
 }
 
 export function bindInteraction<T extends (...args: any[]) => any>(fn: T, context: InteractionContext): T {
@@ -31,7 +33,7 @@ export function bindInteraction<T extends (...args: any[]) => any>(fn: T, contex
 /** Arm only the selected click. Callbacks already registered before installation remain an explicit gap. */
 export function armInteraction(context: InteractionContext): void {
   armed = context;
-  queueMicrotask(() => { if (armed === context) armed = undefined; });
+  setTimeout(() => { if (armed === context) armed = undefined; }, 0);
 }
 
 export function installAsyncContextCapture(): () => void {
