@@ -6,6 +6,9 @@ import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SqlAnalyzerTest {
@@ -61,6 +64,65 @@ class SqlAnalyzerTest {
         assertNotEquals(first.path("symbols").get(0).path("id"), second.path("symbols").get(0).path("id"));
         assertNotEquals(first.path("relations").get(0).path("id"), second.path("relations").get(0).path("id"));
         assertNotEquals(first.path("evidence").get(0).path("id"), second.path("evidence").get(0).path("id"));
+    }
+
+    @Test void insertSelectSeparatesWrittenTargetAndReadSource() {
+        JsonNode result = new SqlAnalyzer().analyze(input("INSERT INTO archive (id)\nSELECT o.id\nFROM orders o"), json);
+        assertEquals(kinds("writes"), relationKinds(result, "archive"), result.toString());
+        assertEquals(kinds("reads"), relationKinds(result, "orders"), result.toString());
+        assertEquals(1, relationLine(result, "archive", "writes"));
+        assertEquals(3, relationLine(result, "orders", "reads"));
+    }
+
+    @Test void insertSelectCanReadAndWriteTheSameTable() {
+        JsonNode result = new SqlAnalyzer().analyze(input("INSERT INTO orders (id) SELECT id FROM orders"), json);
+        assertEquals(kinds("writes", "reads"), relationKinds(result, "orders"), result.toString());
+    }
+
+    @Test void insertValuesWritesItsTargetWithoutInventingReads() {
+        JsonNode result = new SqlAnalyzer().analyze(input("INSERT INTO archive (id) VALUES (?)"), json);
+        assertEquals(kinds("writes"), relationKinds(result, "archive"), result.toString());
+    }
+
+    @Test void updateJoinReadsJoinedTableAndWritesAssignedTarget() {
+        JsonNode result = new SqlAnalyzer().analyze(input("UPDATE orders o JOIN customers c ON c.id=o.customer_id SET o.status = ? WHERE c.active = 1"), json);
+        assertEquals(kinds("writes"), relationKinds(result, "orders"), result.toString());
+        assertEquals(kinds("reads"), relationKinds(result, "customers"), result.toString());
+    }
+
+    @Test void updateJoinCanWriteTheJoinedTableWhenAssignmentNamesIt() {
+        JsonNode result = new SqlAnalyzer().analyze(input("UPDATE orders o JOIN customers c ON c.id=o.customer_id SET c.active = ?"), json);
+        assertEquals(kinds("reads"), relationKinds(result, "orders"), result.toString());
+        assertEquals(kinds("writes"), relationKinds(result, "customers"), result.toString());
+    }
+
+    @Test void deleteJoinWritesOnlyNamedTarget() {
+        JsonNode result = new SqlAnalyzer().analyze(input("DELETE o FROM orders o JOIN customers c ON c.id=o.customer_id WHERE c.active = 0"), json);
+        assertEquals(kinds("writes"), relationKinds(result, "orders"), result.toString());
+        assertEquals(kinds("reads"), relationKinds(result, "customers"), result.toString());
+    }
+
+    @Test void ambiguousJoinedUpdateReportsDependencyWithoutClaimingWrites() {
+        JsonNode result = new SqlAnalyzer().analyze(input("UPDATE orders o JOIN customers c ON c.id=o.customer_id SET status = ?"), json);
+        assertEquals(kinds("depends_on"), relationKinds(result, "orders"), result.toString());
+        assertEquals(kinds("depends_on"), relationKinds(result, "customers"), result.toString());
+        assertTrue(result.path("diagnostics").toString().contains("sql.direction_ambiguous"), result.toString());
+    }
+
+    private static Set<String> kinds(String... values) { return new HashSet<>(Arrays.asList(values)); }
+
+    private static Set<String> relationKinds(JsonNode result, String table) {
+        Set<String> ids = new HashSet<>(), kinds = new HashSet<>();
+        for (JsonNode symbol : result.path("symbols")) if (symbol.path("kind").asText().equals("table") && symbol.path("qualifiedName").asText().equals(table)) ids.add(symbol.path("id").asText());
+        for (JsonNode relation : result.path("relations")) if (ids.contains(relation.path("toId").asText())) kinds.add(relation.path("kind").asText());
+        return kinds;
+    }
+
+    private static int relationLine(JsonNode result, String table, String kind) {
+        String id = "";
+        for (JsonNode symbol : result.path("symbols")) if (symbol.path("kind").asText().equals("table") && symbol.path("qualifiedName").asText().equals(table)) id = symbol.path("id").asText();
+        for (JsonNode relation : result.path("relations")) if (relation.path("toId").asText().equals(id) && relation.path("kind").asText().equals(kind)) return relation.path("location").path("line").asInt();
+        return -1;
     }
 
     private JsonNode input(String source) {

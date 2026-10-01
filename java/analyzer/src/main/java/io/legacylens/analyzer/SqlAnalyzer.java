@@ -9,6 +9,7 @@ import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.Statement;
 import net.sf.jsqlparser.statement.Statements;
 import net.sf.jsqlparser.statement.update.Update;
+import net.sf.jsqlparser.statement.update.UpdateSet;
 import net.sf.jsqlparser.statement.insert.Insert;
 import net.sf.jsqlparser.statement.delete.Delete;
 import net.sf.jsqlparser.parser.ASTNodeAccess;
@@ -20,6 +21,7 @@ import net.sf.jsqlparser.util.TablesNamesFinder;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -69,17 +71,32 @@ public final class SqlAnalyzer {
                         addAlias(aliases, plain.getFromItem());
                         if (plain.getJoins() != null) for (Join join : plain.getJoins()) addAlias(aliases, join.getRightItem());
                     }
+                } else if (statement instanceof Update) {
+                    Update update = (Update) statement;
+                    addAlias(aliases, update.getTable());
+                    addAliases(aliases, update.getStartJoins());
+                    addAliases(aliases, update.getJoins());
+                    addAlias(aliases, update.getFromItem());
+                } else if (statement instanceof Delete) {
+                    Delete delete = (Delete) statement;
+                    addAlias(aliases, delete.getTable());
+                    addAliases(aliases, delete.getJoins());
                 }
                 Set<String> seen = new HashSet<>();
-                boolean write = statement instanceof Update || statement instanceof Insert || statement instanceof Delete;
-                String tableRelation = write ? "writes" : statement instanceof Select ? "reads" : "depends_on";
-                if (!write && !(statement instanceof Select)) AnalyzerMain.diagnostic(result, mapper, "sql.operation_unclassified", "SQL operation direction could not be classified.", path);
+                Map<String, Set<String>> roles = new HashMap<>();
+                Map<String, Map<String, Integer>> roleLines = new HashMap<>();
+                classifyTables(statement, tables, aliases, tableLines, roles, roleLines, source, start, end, queryLine, result, mapper, path);
                 for (String table : tables) {
                     String clean = stripQuotes(table);
                     if (!seen.add("table:" + clean)) continue;
                     int tableLine = tableLines.getOrDefault(clean, tokenLine(source, start, end, clean, queryLine));
                     String target = AnalyzerMain.symbol(result, mapper, input, artifact, clean, "", "table", tableLine).path("id").asText();
-                    AnalyzerMain.relation(result, mapper, queryId, target, tableRelation, "resolved", path, tableLine);
+                    for (String role : new String[]{"writes", "reads", "depends_on"}) {
+                        if (roles.getOrDefault(clean, new HashSet<>()).contains(role)) {
+                            int line = roleLines.get(clean).get(role);
+                            AnalyzerMain.relation(result, mapper, queryId, target, role, role.equals("depends_on") ? "unresolved" : "resolved", path, line);
+                        }
+                    }
                 }
                 for (Column column : columns) {
                     String table = column.getTable() == null ? "" : stripQuotes(column.getTable().getName());
@@ -90,6 +107,77 @@ public final class SqlAnalyzer {
                     String target = AnalyzerMain.symbol(result, mapper, input, artifact, name, "", "column", columnLine).path("id").asText();
                     AnalyzerMain.relation(result, mapper, queryId, target, "uses", table.isEmpty() ? "unresolved" : "resolved", path, columnLine);
                 }
+    }
+    private static void classifyTables(Statement statement, List<String> tables, Map<String, String> aliases, Map<String, Integer> tableLines,
+            Map<String, Set<String>> roles, Map<String, Map<String, Integer>> roleLines, String source, int start, int end, int queryLine,
+            ObjectNode result, ObjectMapper mapper, String path) {
+        if (statement instanceof Select) {
+            for (String table : tables) addRole(roles, roleLines, stripQuotes(table), "reads", tableLines.getOrDefault(stripQuotes(table), queryLine));
+        } else if (statement instanceof Insert) {
+            Insert insert = (Insert) statement;
+            Table target = insert.getTable();
+            if (target != null) addRole(roles, roleLines, stripQuotes(target.getName()), "writes", nodeLine(target, source, start, end, target.getName()));
+            else AnalyzerMain.diagnostic(result, mapper, "sql.direction_ambiguous", "SQL write target could not be identified safely.", path);
+            if (insert.getSelect() != null) {
+                TablesNamesFinder sources = new TablesNamesFinder() {
+                    @Override public void visit(Table table) {
+                        addRole(roles, roleLines, stripQuotes(table.getName()), "reads", nodeLine(table, source, start, end, table.getName()));
+                        super.visit(table);
+                    }
+                };
+                sources.getTableList((Statement) insert.getSelect());
+            }
+            for (String table : tables) if (!roles.containsKey(stripQuotes(table))) addRole(roles, roleLines, stripQuotes(table), "depends_on", tableLines.getOrDefault(stripQuotes(table), queryLine));
+        } else if (statement instanceof Update) {
+            Update update = (Update) statement;
+            Set<String> assigned = new LinkedHashSet<>();
+            boolean unqualified = false;
+            if (update.getUpdateSets() != null) for (UpdateSet updateSet : update.getUpdateSets()) if (updateSet.getColumns() != null) for (Column column : updateSet.getColumns()) {
+                String qualifier = column.getTable() == null ? "" : stripQuotes(column.getTable().getName());
+                if (qualifier.isEmpty()) unqualified = true;
+                else assigned.add(aliases.getOrDefault(qualifier, qualifier));
+            }
+            Set<String> known = new HashSet<>();
+            for (String table : tables) known.add(stripQuotes(table));
+            if ((unqualified && tables.size() > 1) || (assigned.isEmpty() && !unqualified) || !known.containsAll(assigned)) {
+                AnalyzerMain.diagnostic(result, mapper, "sql.direction_ambiguous", "Joined SQL update target could not be identified safely.", path);
+                for (String table : tables) addRole(roles, roleLines, stripQuotes(table), "depends_on", tableLines.getOrDefault(stripQuotes(table), queryLine));
+            } else {
+                if (unqualified && update.getTable() != null) assigned.add(stripQuotes(update.getTable().getName()));
+                for (String table : tables) {
+                    String clean = stripQuotes(table);
+                    addRole(roles, roleLines, clean, assigned.contains(clean) ? "writes" : "reads", tableLines.getOrDefault(clean, queryLine));
+                }
+            }
+        } else if (statement instanceof Delete) {
+            Delete delete = (Delete) statement;
+            Set<String> targets = new HashSet<>();
+            if (delete.getTables() != null && !delete.getTables().isEmpty()) for (Table target : delete.getTables()) {
+                String name = stripQuotes(target.getName()); targets.add(aliases.getOrDefault(name, name));
+            }
+            else if (delete.getTable() != null) targets.add(stripQuotes(delete.getTable().getName()));
+            Set<String> known = new HashSet<>();
+            for (String table : tables) known.add(stripQuotes(table));
+            if (targets.isEmpty() || !known.containsAll(targets)) {
+                AnalyzerMain.diagnostic(result, mapper, "sql.direction_ambiguous", "SQL delete target could not be identified safely.", path);
+                for (String table : tables) addRole(roles, roleLines, stripQuotes(table), "depends_on", tableLines.getOrDefault(stripQuotes(table), queryLine));
+                return;
+            }
+            for (String table : tables) {
+                String clean = stripQuotes(table);
+                addRole(roles, roleLines, clean, targets.contains(clean) ? "writes" : "reads", tableLines.getOrDefault(clean, queryLine));
+            }
+        } else {
+            AnalyzerMain.diagnostic(result, mapper, "sql.operation_unclassified", "SQL operation direction could not be classified.", path);
+            for (String table : tables) addRole(roles, roleLines, stripQuotes(table), "depends_on", tableLines.getOrDefault(stripQuotes(table), queryLine));
+        }
+    }
+    private static void addRole(Map<String, Set<String>> roles, Map<String, Map<String, Integer>> lines, String table, String role, int line) {
+        roles.computeIfAbsent(table, ignored -> new HashSet<>()).add(role);
+        lines.computeIfAbsent(table, ignored -> new HashMap<>()).putIfAbsent(role, line);
+    }
+    private static void addAliases(Map<String, String> aliases, List<Join> joins) {
+        if (joins != null) for (Join join : joins) addAlias(aliases, join.getRightItem());
     }
     private static void addAlias(Map<String, String> aliases, FromItem item) {
         if (item instanceof Table) {
