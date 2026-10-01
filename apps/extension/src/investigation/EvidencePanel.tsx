@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { Diagnostic, Evidence, Location, OpenResult } from '@legacylens/contracts/src/protocol.ts';
 import type { CommandClient } from '../native/client.ts';
 import type { Selection } from './GraphView.tsx';
@@ -8,14 +8,25 @@ export function EvidencePanel({ selection, diagnostics, evidence, client, projec
 }) {
   const [openResult, setOpenResult] = useState<OpenResult | undefined>();
   const [openError, setOpenError] = useState('');
-  useEffect(() => { setOpenResult(undefined); setOpenError(''); }, [selection]);
+  const requestVersion = useRef(0);
+  useLayoutEffect(() => {
+    requestVersion.current += 1;
+    setOpenResult(undefined);
+    setOpenError('');
+  }, [selection]);
   const relatedEvidence = selection?.kind === 'relation' ? evidence.filter((item) => selection.value.evidenceIds.includes(item.id)) : [];
   const location: Location | undefined = selection?.kind === 'symbol' || selection?.kind === 'relation' ? selection.value.location ?? relatedEvidence.find((item) => item.location)?.location : undefined;
   const open = async () => {
     if (!location) return;
+    const version = ++requestVersion.current;
+    setOpenResult(undefined);
     setOpenError('');
-    try { setOpenResult(await client.request<OpenResult>('location.open', { projectId, location })); }
-    catch (error) { setOpenError(error instanceof Error ? error.message : 'Não foi possível abrir a fonte.'); }
+    try {
+      const result = await client.request<OpenResult>('location.open', { projectId, location });
+      if (version === requestVersion.current) setOpenResult(result);
+    } catch (error) {
+      if (version === requestVersion.current) setOpenError(error instanceof Error ? error.message : 'Não foi possível abrir a fonte.');
+    }
   };
   return <aside aria-label="Evidência" className="evidence-panel">
     <h2>Evidência</h2>

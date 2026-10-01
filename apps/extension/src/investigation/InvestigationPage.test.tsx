@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, test, vi } from 'vitest';
 import type { Investigation, OpenResult, Page } from '@legacylens/contracts/src/protocol.ts';
 import type { Command, CommandClient } from '../native/client.ts';
@@ -92,4 +92,90 @@ test('does not claim the agent is offline when status evidence is absent from lo
   } };
   render(<InvestigationPage client={client} projectId="p" traceId={traceId} />);
   expect(await screen.findByText(/Agente: estado não confirmado/)).toBeVisible();
+});
+
+test('renders a cross-producer fork as navigable nested causal branches', async () => {
+  const investigation = { ...base(), events: page([]),
+    symbols: page([
+      { id: 'root', projectId: 'p', revisionId: '', artifactId: '', path: '', qualifiedName: 'click · producer browser-epoch · event click', descriptor: '', kind: 'observed-event' },
+      { id: 'ajax', projectId: 'p', revisionId: '', artifactId: '', path: '', qualifiedName: 'ajax · producer browser-epoch · event ajax', descriptor: '', kind: 'observed-event' },
+      { id: 'java', projectId: 'p', revisionId: '', artifactId: '', path: '', qualifiedName: 'request · producer java-epoch · event request', descriptor: '', kind: 'observed-java' },
+    ]),
+    relations: page([
+      { id: 'edge-ajax', fromId: 'root', toId: 'ajax', kind: 'event.parent', evidenceIds: ['ajax'], resolution: 'resolved', layer: 'observed' },
+      { id: 'edge-java', fromId: 'root', toId: 'java', kind: 'event.parent', evidenceIds: ['java'], resolution: 'resolved', layer: 'observed' },
+    ]) } satisfies Investigation;
+  const client: CommandClient = { async request<T>() { return investigation as T; } };
+  render(<InvestigationPage client={client} projectId="p" traceId={traceId} />);
+  const root = await screen.findByRole('button', { name: /click · producer browser-epoch/ });
+  const ajax = screen.getByRole('button', { name: /ajax · producer browser-epoch/ });
+  const java = screen.getByRole('button', { name: /request · producer java-epoch/ });
+  expect(root.closest('li')).toContainElement(ajax);
+  expect(root.closest('li')).toContainElement(java);
+  fireEvent.click(java);
+  expect(screen.getByRole('heading', { name: /request · producer java-epoch/ })).toBeVisible();
+});
+
+test('places missing and ambiguous parent gaps above their known children', async () => {
+  const investigation = { ...base(), events: page([]),
+    symbols: page([
+      { id: 'missing-child', projectId: 'p', revisionId: '', artifactId: '', path: '', qualifiedName: 'missing-child', descriptor: '', kind: 'observed-event' },
+      { id: 'ambiguous-child', projectId: 'p', revisionId: '', artifactId: '', path: '', qualifiedName: 'ambiguous-child', descriptor: '', kind: 'observed-event' },
+    ]),
+    relations: page([
+      { id: 'missing', fromId: 'unknown-one', toId: 'missing-child', kind: 'event.parent_missing', evidenceIds: ['missing-child'], resolution: 'unresolved', layer: 'observed' },
+      { id: 'ambiguous', fromId: 'unknown-two', toId: 'ambiguous-child', kind: 'event.parent_ambiguous', evidenceIds: ['ambiguous-child'], resolution: 'unresolved', layer: 'observed' },
+    ]) } satisfies Investigation;
+  const client: CommandClient = { async request<T>() { return investigation as T; } };
+  render(<InvestigationPage client={client} projectId="p" traceId={traceId} />);
+  const missing = await screen.findByRole('button', { name: /Pai desconhecido/ });
+  const ambiguous = screen.getByRole('button', { name: /Pai ambíguo/ });
+  expect(missing.closest('li')).toContainElement(screen.getByRole('button', { name: 'missing-child' }));
+  expect(ambiguous.closest('li')).toContainElement(screen.getByRole('button', { name: 'ambiguous-child' }));
+});
+
+test('stops expanding a cyclic observed relation path', async () => {
+  const investigation = { ...base(), events: page([]),
+    symbols: page([
+      { id: 'a', projectId: 'p', revisionId: '', artifactId: '', path: '', qualifiedName: 'event A', descriptor: '', kind: 'observed-event' },
+      { id: 'b', projectId: 'p', revisionId: '', artifactId: '', path: '', qualifiedName: 'event B', descriptor: '', kind: 'observed-event' },
+    ]),
+    relations: page([
+      { id: 'a-to-b', fromId: 'a', toId: 'b', kind: 'event.parent', evidenceIds: ['b'], resolution: 'resolved', layer: 'observed' },
+      { id: 'b-to-a', fromId: 'b', toId: 'a', kind: 'event.parent', evidenceIds: ['a'], resolution: 'resolved', layer: 'observed' },
+    ]) } satisfies Investigation;
+  const client: CommandClient = { async request<T>() { return investigation as T; } };
+  render(<InvestigationPage client={client} projectId="p" traceId={traceId} />);
+  expect(await screen.findByText(/Ciclo de relação observado/)).toBeVisible();
+  expect(screen.getByRole('button', { name: 'event A' }).closest('li')).toContainElement(screen.getByRole('button', { name: 'event B' }));
+});
+
+test('shows canonical revision mismatch with an empty indexed symbol snapshot', async () => {
+  const investigation = { ...base(), indexedRevisionId: 'revision-A', symbols: page([]),
+    events: page([{ ...event('java', 1), applicationRevision: 'revision-B' }]) } satisfies Investigation;
+  const client: CommandClient = { async request<T>() { return investigation as T; } };
+  render(<InvestigationPage client={client} projectId="p" traceId={traceId} />);
+  expect(await screen.findByText(/Versão incompatível/)).toBeVisible();
+  expect(screen.getByText(/Índice exibido: revisão revision-A/)).toBeVisible();
+});
+
+test('ignores a stale source-open completion after selecting another node', async () => {
+  let resolveOpen!: (value: OpenResult) => void;
+  const opened = new Promise<OpenResult>((resolve) => { resolveOpen = resolve; });
+  const locationA = { path: 'a.xhtml', line: 1, column: 1 };
+  const locationB = { path: 'b.xhtml', line: 2, column: 1 };
+  const investigation = { ...base(), events: page([]), symbols: page([
+    { id: 'a', projectId: 'p', revisionId: 'r', artifactId: 'a', path: 'a.xhtml', qualifiedName: 'A', descriptor: '', kind: 'xhtml', location: locationA },
+    { id: 'b', projectId: 'p', revisionId: 'r', artifactId: 'b', path: 'b.xhtml', qualifiedName: 'B', descriptor: '', kind: 'xhtml', location: locationB },
+  ]) } satisfies Investigation;
+  const client: CommandClient = { async request<T>(command: Command) {
+    return (command === 'location.open' ? await opened : investigation) as T;
+  } };
+  render(<InvestigationPage client={client} projectId="p" traceId={traceId} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'A' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Abrir no IntelliJ' }));
+  fireEvent.click(screen.getByRole('button', { name: 'B' }));
+  await act(async () => { resolveOpen({ opened: false, message: 'Old source', file: 'C:/App/a.xhtml', line: 1 }); await opened; });
+  await waitFor(() => expect(screen.getByText('Fonte: b.xhtml:2')).toBeVisible());
+  expect(screen.queryByText(/Old source/)).not.toBeInTheDocument();
 });

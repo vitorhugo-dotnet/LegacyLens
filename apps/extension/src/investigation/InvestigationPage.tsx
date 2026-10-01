@@ -66,7 +66,9 @@ export function InvestigationPage({ client, projectId, traceId }: { client: Comm
   if (!loaded) return <p role="status">Carregando investigação…</p>;
   const { investigation, complete } = loaded;
   const { events, symbols, relations, diagnostics, evidence, trace } = investigation;
-  const indexedRevisions = new Set(symbols.items.filter((symbol) => symbol.revisionId).map((symbol) => symbol.revisionId));
+  const indexedRevisions = new Set(investigation.indexedRevisionId
+    ? [investigation.indexedRevisionId]
+    : symbols.items.filter((symbol) => symbol.revisionId).map((symbol) => symbol.revisionId!));
   const declaredRevisions = new Set(events.items.filter((event) => event.applicationRevision).map((event) => event.applicationRevision));
   const mismatch = diagnostics.items.some((diagnostic) => diagnostic.code === 'source.version_mismatch')
     || (indexedRevisions.size === 1 && declaredRevisions.size > 0
@@ -82,6 +84,7 @@ export function InvestigationPage({ client, projectId, traceId }: { client: Comm
     {loaded.error && <p role="alert">Página incompleta: {loaded.error}</p>}
     <p>{events.items.length} de {events.total} eventos · {symbols.items.length} de {symbols.total} símbolos · {relations.items.length} de {relations.total} relações · {evidence.items.length} de {evidence.total} evidências · {diagnostics.items.length} de {diagnostics.total} diagnósticos</p>
     <p>Agente: {agent.state === 'offline' && agentEvidenceLoaded ? 'offline (diagnóstico confirmado)' : agent.state === 'online' && agentEvidenceLoaded ? 'online (diagnóstico confirmado)' : 'estado não confirmado'}</p>
+    {investigation.indexedRevisionId && <p>Índice exibido: revisão {investigation.indexedRevisionId} (snapshot estático; correspondência com a implantação não confirmada).</p>}
     <p>{mismatch ? 'Versão incompatível: revisão declarada diverge do índice.' : 'Correspondência entre implantação e fonte não confirmada.'}</p>
     <label><input type="checkbox" checked={showStatic} onChange={(event) => setShowStatic(event.target.checked)} />Relações estáticas</label>
     <div className="investigation-layout">

@@ -68,6 +68,7 @@ func (s *InvestigationService) Get(ctx context.Context, projectID, traceID domai
 			name = class + "." + method + event.Metadata["code.descriptor"]
 			kind = "observed-java"
 		}
+		name += fmt.Sprintf(" · producer %s · event %s", event.ProducerID, event.EventID)
 		value.Symbols = append(value.Symbols, domain.Symbol{ID: id, ProjectID: projectID, QualifiedName: name, Kind: kind})
 		observedAt := event.OccurredAt
 		value.Evidence = append(value.Evidence, domain.Evidence{ID: id, Kind: "observed-event", Source: event.Kind, ObservedAt: &observedAt})
@@ -109,17 +110,19 @@ func (s *InvestigationService) Get(ctx context.Context, projectID, traceID domai
 			continue
 		}
 		matches := byEventID[*event.ParentEventID]
-		relation := domain.Relation{ID: stableID("observed-parent", string(projectID), string(traceID), string(event.ProducerID), string(event.EventID)), FromID: child, Kind: "event.parent", EvidenceIDs: []domain.ID{child}, Resolution: domain.ResolutionUnresolved, Layer: domain.LayerObserved}
+		unknownParent := stableID("unknown-parent", string(projectID), string(traceID), string(event.ProducerID), string(event.EventID))
+		relation := domain.Relation{ID: stableID("observed-parent", string(projectID), string(traceID), string(event.ProducerID), string(event.EventID)), FromID: unknownParent, ToID: &child, Kind: "event.parent_missing", EvidenceIDs: []domain.ID{child}, Resolution: domain.ResolutionUnresolved, Layer: domain.LayerObserved}
 		if len(matches) == 1 {
 			parent := matches[0]
 			if parentID := ids[string(parent.ProducerID)+"\x00"+string(parent.EventID)]; parentID != "" {
-				relation.FromID, relation.ToID, relation.Resolution = parentID, &child, domain.ResolutionResolved
+				relation.FromID, relation.Kind, relation.Resolution = parentID, "event.parent", domain.ResolutionResolved
 			}
 		} else {
 			value.Trace.Incomplete = true
 			code, message := "capture.parent_missing", "Parent event is absent from this investigation."
 			if len(matches) > 1 {
 				code, message = "capture.parent_ambiguous", "Parent event ID occurs in multiple producer epochs; its causal link is unconfirmed."
+				relation.Kind = "event.parent_ambiguous"
 			}
 			addInvestigationDiagnostic(&value, code, message, event)
 		}

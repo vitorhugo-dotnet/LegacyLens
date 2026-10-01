@@ -65,20 +65,28 @@ func TestInvestigationSeparatesLayers(t *testing.T) {
 func TestInvestigationPreservesProducerIdentityAndMissingParent(t *testing.T) {
 	project, trace := domain.ID("p"), domain.ID("0123456789abcdef0123456789abcdef")
 	missing := domain.ID("not-loaded")
+	ambiguous := domain.ID("same")
 	events := []domain.Event{
 		{ProjectID: project, TraceID: trace, ProducerID: "epoch-a", Sequence: 1, EventID: "same", Kind: "jsf.click"},
 		{ProjectID: project, TraceID: trace, ProducerID: "epoch-b", Sequence: 1, EventID: "same", Kind: "jsf.click"},
 		{ProjectID: project, TraceID: trace, ProducerID: "epoch-b", Sequence: 2, EventID: "child", ParentEventID: &missing, Kind: "browser.network"},
+		{ProjectID: project, TraceID: trace, ProducerID: "epoch-b", Sequence: 3, EventID: "ambiguous-child", ParentEventID: &ambiguous, Kind: "browser.network"},
 	}
 	got, err := NewInvestigationService(investigationStore{Investigation{Trace: domain.Trace{ID: trace, ProjectID: project}, Events: events}}).Get(context.Background(), project, trace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Symbols) != 3 || got.Symbols[0].ID == got.Symbols[1].ID {
+	if len(got.Symbols) != 4 || got.Symbols[0].ID == got.Symbols[1].ID {
 		t.Fatal("producer epochs collapsed")
 	}
-	if len(got.Relations) != 1 || got.Relations[0].Resolution != domain.ResolutionUnresolved || got.Relations[0].ToID != nil {
-		t.Fatalf("missing parent relation: %+v", got.Relations)
+	if len(got.Relations) != 2 {
+		t.Fatalf("parent relations = %+v", got.Relations)
+	}
+	for i, kind := range []string{"event.parent_missing", "event.parent_ambiguous"} {
+		relation := got.Relations[i]
+		if relation.Resolution != domain.ResolutionUnresolved || relation.Kind != kind || relation.ToID == nil || *relation.ToID != got.Symbols[i+2].ID || relation.FromID == *relation.ToID {
+			t.Fatalf("unresolved parent relation points in the wrong direction: %+v", relation)
+		}
 	}
 	if !got.Trace.Incomplete {
 		t.Fatal("missing parent was treated as complete")
