@@ -11,6 +11,7 @@ $previousPath = $env:PATH
 $previousAppData = $env:APPDATA
 $server = $null
 try {
+  & (Join-Path $PSScriptRoot 'test-agent-smoke.ps1') -AgentJar (Join-Path $package 'agent/legacylens-agent.jar') -AgentSmokeClassPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'java/agent/target/test-classes')
   $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
   $env:APPDATA = Join-Path $temp 'AppData'
   if (Get-Command go,node -ErrorAction SilentlyContinue) { throw 'Go or Node remains available on the smoke-test PATH.' }

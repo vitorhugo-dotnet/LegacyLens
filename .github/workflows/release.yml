@@ -51,7 +51,7 @@ jobs:
           if (-not $manifest.componentVersions.extension -or -not $manifest.componentVersions.javaAgent -or -not $manifest.componentVersions.javaRuntime -or -not $manifest.componentVersions.goToolchain -or -not $manifest.componentVersions.nodeToolchain) { throw 'Manifest is missing component or toolchain versions.' }
           $extensionManifest = Get-Content (Join-Path $expandedPath 'extension/manifest.json') -Raw | ConvertFrom-Json
           if ($extensionManifest.version -ne $manifest.componentVersions.extension) { throw 'Extension manifest version does not match package provenance.' }
-          $requiredChecks = @('contracts','extension','core','java8-runtime','java21-runtime','legacy-fixture','legacy-e2e','packaged-core-smoke')
+          $requiredChecks = @('contracts','extension','core','java8-runtime','java8-agent-smoke','java21-runtime','java21-agent-smoke','legacy-fixture','legacy-e2e','packaged-core-smoke','packaged-agent-smoke')
           foreach ($check in $requiredChecks) { if ($manifest.verificationResults.$check -ne 'passed') { throw "Required verification is missing or not passed: $check" } }
           if ($manifest.releasePrerequisites.task11JavaWorker -ne 'complete' -or $manifest.releasePrerequisites.task17ModernFixture -ne 'complete') { throw 'Release is blocked until Task11 Java worker and Task17 modern fixture assets and checks are complete.' }
           foreach ($asset in $manifest.releasePrerequisites.requiredAssets) { if (-not (Test-Path (Join-Path $expandedPath $asset))) { throw "Required release asset is missing: $asset" } }

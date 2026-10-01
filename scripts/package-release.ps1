@@ -42,6 +42,7 @@ try {
   $manifest | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $stage 'release-manifest.json') -Encoding utf8
   & "$PSScriptRoot/test-package.ps1" -PackageDirectory $stage
   $manifest.verificationResults['packaged-core-smoke'] = 'passed'
+  $manifest.verificationResults['packaged-agent-smoke'] = 'passed'
   $manifest | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $stage 'release-manifest.json') -Encoding utf8
   $zip = Join-Path $out 'legacylens-windows-x64.zip'
   if (Test-Path $zip) { Remove-Item $zip -Force }
