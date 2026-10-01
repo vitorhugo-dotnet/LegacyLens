@@ -164,10 +164,13 @@ export interface IngestResult {
 export interface Investigation {
   project: Project;
   trace: Trace;
+  agentStatus: { state: 'unknown' | 'online' | 'offline'; evidenceDiagnosticId?: ID };
+  indexedRevisionId?: ID;
   events: Page<Event>;
   diagnostics: Page<Diagnostic>;
   symbols: Page<Symbol>;
   relations: Page<Relation>;
+  evidence: Page<Evidence>;
 }
 
 export interface OpenResult {

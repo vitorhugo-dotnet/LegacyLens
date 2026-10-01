@@ -251,7 +251,86 @@ func (s *Store) Load(ctx context.Context, projectID, traceID domain.ID) (applica
 		}
 		investigation.Diagnostics = append(investigation.Diagnostics, diagnostic)
 	}
-	return investigation, diagRows.Err()
+	if err := diagRows.Err(); err != nil {
+		return investigation, err
+	}
+	if err := diagRows.Close(); err != nil {
+		return investigation, err
+	}
+	return investigation, nil
+}
+
+func (s *Store) LoadInvestigationIndex(ctx context.Context, projectID domain.ID) (application.InvestigationIndex, error) {
+	var snapshot application.InvestigationIndex
+	// The indexed graph is a separate static layer. Use one revision as a unit;
+	// its relation evidence never becomes proof that the trace executed it.
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM revisions WHERE project_id=? ORDER BY created_at DESC,id DESC LIMIT 1`, projectID).Scan(&snapshot.RevisionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return snapshot, nil
+	}
+	if err != nil {
+		return snapshot, err
+	}
+	collections := []struct {
+		table       string
+		appendValue func(string) error
+	}{
+		{"symbols", func(value string) error {
+			var item domain.Symbol
+			if err := json.Unmarshal([]byte(value), &item); err != nil {
+				return err
+			}
+			snapshot.Symbols = append(snapshot.Symbols, item)
+			return nil
+		}},
+		{"relations", func(value string) error {
+			var item domain.Relation
+			if err := json.Unmarshal([]byte(value), &item); err != nil {
+				return err
+			}
+			snapshot.Relations = append(snapshot.Relations, item)
+			return nil
+		}},
+		{"evidence", func(value string) error {
+			var item domain.Evidence
+			if err := json.Unmarshal([]byte(value), &item); err != nil {
+				return err
+			}
+			snapshot.Evidence = append(snapshot.Evidence, item)
+			return nil
+		}},
+		{"diagnostics", func(value string) error {
+			var item domain.Diagnostic
+			if err := json.Unmarshal([]byte(value), &item); err != nil {
+				return err
+			}
+			snapshot.Diagnostics = append(snapshot.Diagnostics, item)
+			return nil
+		}},
+	}
+	for _, collection := range collections {
+		rows, err := s.db.QueryContext(ctx, `SELECT value_json FROM `+collection.table+` WHERE project_id=? AND revision_id=? ORDER BY id`, projectID, snapshot.RevisionID)
+		if err != nil {
+			return snapshot, err
+		}
+		for rows.Next() {
+			var value string
+			if err := rows.Scan(&value); err != nil {
+				rows.Close()
+				return snapshot, err
+			}
+			if err := collection.appendValue(value); err != nil {
+				rows.Close()
+				return snapshot, err
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return snapshot, err
+		}
+		rows.Close()
+	}
+	return snapshot, nil
 }
 
 func loadTraceEvents(ctx context.Context, tx *sql.Tx, projectID, traceID domain.ID) ([]domain.Event, error) {

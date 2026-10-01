@@ -34,7 +34,18 @@ export default defineBackground(() => {
     const senderOrigin = originOf(sender.url);
     if (tabId === undefined || !senderOrigin || !msg || typeof msg.type !== 'string') return;
     const run = async () => {
-      if (msg.type === 'projects.list') return client.request<ProjectListResult>('project.list', { offset: 0, limit: 200 });
+      if (msg.type === 'projects.list') return client.request<ProjectListResult>('project.list', { offset: typeof msg.offset === 'number' ? msg.offset : 0, limit: 200 });
+      if (msg.type === 'projects.open') {
+        await chrome.tabs.create({ url: chrome.runtime.getURL('investigation.html') });
+        return { opened: true };
+      }
+      if (msg.type === 'investigation.open' && typeof msg.projectId === 'string' && /^[a-f0-9]{32}$/i.test(String(msg.traceId))) {
+        const url = new URL(chrome.runtime.getURL('investigation.html'));
+        url.searchParams.set('projectId', msg.projectId);
+        url.searchParams.set('traceId', String(msg.traceId));
+        await chrome.tabs.create({ url: url.toString() });
+        return { opened: true };
+      }
       if (msg.type === 'capture.start' && typeof msg.projectId === 'string') {
         const session = await controller.start({ projectId: msg.projectId, tabId, origin: senderOrigin });
         return { session, gap: false };

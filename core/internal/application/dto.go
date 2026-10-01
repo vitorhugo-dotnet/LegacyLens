@@ -110,17 +110,20 @@ func NewPage[T any](items []T, offset, limit, total int) Page[T] {
 }
 
 type InvestigationPage struct {
-	Project     domain.Project          `json:"project"`
-	Trace       domain.Trace            `json:"trace"`
-	Events      Page[domain.Event]      `json:"events"`
-	Diagnostics Page[domain.Diagnostic] `json:"diagnostics"`
-	Symbols     Page[domain.Symbol]     `json:"symbols"`
-	Relations   Page[domain.Relation]   `json:"relations"`
+	Project           domain.Project          `json:"project"`
+	Trace             domain.Trace            `json:"trace"`
+	AgentStatus       AgentStatus             `json:"agentStatus"`
+	IndexedRevisionID domain.ID               `json:"indexedRevisionId,omitempty"`
+	Events            Page[domain.Event]      `json:"events"`
+	Diagnostics       Page[domain.Diagnostic] `json:"diagnostics"`
+	Symbols           Page[domain.Symbol]     `json:"symbols"`
+	Relations         Page[domain.Relation]   `json:"relations"`
+	Evidence          Page[domain.Evidence]   `json:"evidence"`
 }
 
 func PageInvestigation(value Investigation, offset, limit int) InvestigationPage {
 	return InvestigationPage{
-		Project: value.Project, Trace: value.Trace,
+		Project: value.Project, Trace: value.Trace, AgentStatus: value.AgentStatus, IndexedRevisionID: value.IndexedRevisionID,
 		Events: sortedPage(value.Events, offset, limit, func(a, b domain.Event) bool {
 			if a.ProducerID == b.ProducerID {
 				if a.Sequence == b.Sequence {
@@ -133,6 +136,7 @@ func PageInvestigation(value Investigation, offset, limit int) InvestigationPage
 		Diagnostics: sortedPage(value.Diagnostics, offset, limit, func(a, b domain.Diagnostic) bool { return a.ID < b.ID }),
 		Symbols:     sortedPage(value.Symbols, offset, limit, func(a, b domain.Symbol) bool { return a.ID < b.ID }),
 		Relations:   sortedPage(value.Relations, offset, limit, func(a, b domain.Relation) bool { return a.ID < b.ID }),
+		Evidence:    sortedPage(value.Evidence, offset, limit, func(a, b domain.Evidence) bool { return a.ID < b.ID }),
 	}
 }
 
@@ -194,12 +198,30 @@ type IngestResult struct {
 }
 
 type Investigation struct {
-	Project     domain.Project      `json:"project"`
-	Trace       domain.Trace        `json:"trace"`
-	Events      []domain.Event      `json:"events"`
-	Diagnostics []domain.Diagnostic `json:"diagnostics"`
-	Symbols     []domain.Symbol     `json:"symbols"`
-	Relations   []domain.Relation   `json:"relations"`
+	Project           domain.Project      `json:"project"`
+	Trace             domain.Trace        `json:"trace"`
+	AgentStatus       AgentStatus         `json:"agentStatus"`
+	IndexedRevisionID domain.ID           `json:"indexedRevisionId,omitempty"`
+	Events            []domain.Event      `json:"events"`
+	Diagnostics       []domain.Diagnostic `json:"diagnostics"`
+	Symbols           []domain.Symbol     `json:"symbols"`
+	Relations         []domain.Relation   `json:"relations"`
+	Evidence          []domain.Evidence   `json:"evidence"`
+}
+
+type InvestigationIndex struct {
+	RevisionID  domain.ID
+	Symbols     []domain.Symbol
+	Relations   []domain.Relation
+	Evidence    []domain.Evidence
+	Diagnostics []domain.Diagnostic
+}
+
+// AgentStatus requires a diagnostic with an authenticated liveness signal.
+// A missing signal is unknown, including when a trace has no Java events.
+type AgentStatus struct {
+	State                string    `json:"state"`
+	EvidenceDiagnosticID domain.ID `json:"evidenceDiagnosticId,omitempty"`
 }
 
 type OpenResult struct {

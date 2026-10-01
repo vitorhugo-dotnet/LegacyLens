@@ -44,6 +44,11 @@ type TraceStore interface {
 	Load(context.Context, domain.ID, domain.ID) (Investigation, error)
 }
 
+// InvestigationIndexStore reads one indexed snapshot only when a user opens an investigation.
+type InvestigationIndexStore interface {
+	LoadInvestigationIndex(context.Context, domain.ID) (InvestigationIndex, error)
+}
+
 type CaptureStore interface {
 	LoadProject(context.Context, domain.ID) (domain.Project, error)
 	StartCapture(context.Context, domain.Trace, string) error

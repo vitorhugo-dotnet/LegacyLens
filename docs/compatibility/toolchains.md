@@ -38,3 +38,15 @@ The Task 6 agent runtime is Java 8, while implementation and required cross-vers
 The extension reuses the repository's exact TypeScript 5.9.3 and Vitest 5.0.3 versions. These are initial workspace dependencies, not upgrades. Runtime target is Chrome/Chromium Manifest V3 on Windows 10 x64. Chrome  extension build and local tests do not establish compatibility with the user's private PrimeFaces/WildFly application; that validation belongs to later tasks.
 
 When the bounded active-trace state table is full, the agent rejects a new trace without assigning the loss to an existing trace. The background transport thread writes a coalesced structured line to the agent process stderr, for example `{"kind":"agent.capacity_rejected","count":3}`. It emits at most one line per second, includes no trace IDs or credentials, and preserves rejections that arrive while the diagnostic sink is writing. Capture remains nonblocking on application threads; check the agent process stderr for this capacity signal.
+
+## Investigation UI (Task 9)
+
+| Component | Exact initial version | License and compatibility evidence |
+| --- | --- | --- |
+| React and React DOM | 18.3.1 | MIT; [React repository](https://github.com/facebook/react/blob/v18.3.1/LICENSE) and [React DOM package](https://github.com/facebook/react/blob/v18.3.1/packages/react-dom/package.json). React 18 renders the extension's local investigation page. |
+| React Testing Library and DOM Testing Library | 16.3.0 and 10.4.1 | MIT; [official installation guide](https://testing-library.com/docs/react-testing-library/intro/) documents the DOM peer dependency and React DOM testing model. Test dependencies only. |
+| Testing Library jest-dom | 6.8.0 | MIT; [official repository](https://github.com/testing-library/jest-dom). Test assertions only. |
+| jsdom | 26.1.0 | MIT; [official repository](https://github.com/jsdom/jsdom) supports the pinned Node 22 toolchain. Test DOM only. |
+| React and React DOM type packages | 18.3.24 and 18.3.7 | MIT; [DefinitelyTyped repository](https://github.com/DefinitelyTyped/DefinitelyTyped) supplies the development typings. |
+
+All are exact initial selections recorded in `apps/extension/package.json` and the lockfile. Existing WXT, TypeScript, Vitest, and Node versions remain pinned as above.

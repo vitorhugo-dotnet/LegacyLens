@@ -28,13 +28,20 @@ export default defineContentScript({
       const select = document.createElement('select');
       const start = document.createElement('button'); start.textContent = 'Capture next interaction';
       const stop = document.createElement('button'); stop.textContent = 'Stop capture';
+      const projectsButton = document.createElement('button'); projectsButton.textContent = 'Manage projects';
       const status = document.createElement('div'); status.setAttribute('role', 'status');
-      label.append(select); panel.append(label, start, stop, status); document.documentElement.append(panel);
+      label.append(select); panel.append(label, start, stop, projectsButton, status); document.documentElement.append(panel);
+      projectsButton.onclick = () => { void ask({ type: 'projects.open' }).catch(() => { status.textContent = 'Could not open project management.'; }); };
       try {
-        const projects = await ask<ProjectListResult>({ type: 'projects.list' });
-        for (const project of projects.items) { const option = document.createElement('option'); option.value = project.id; option.textContent = project.name; select.append(option); }
-        if (projects.hasMore) status.textContent = 'Showing first 200 projects.';
-        if (!projects.items.length) status.textContent = 'Register a project with the local LegacyLens CLI first.';
+        let offset = 0;
+        let count = 0;
+        for (;;) {
+          const projects = await ask<ProjectListResult>({ type: 'projects.list', offset });
+          for (const project of projects.items) { const option = document.createElement('option'); option.value = project.id; option.textContent = project.name; select.append(option); count++; }
+          if (!projects.hasMore) break;
+          offset += projects.limit;
+        }
+        if (!count) status.textContent = 'Abra a investigação do LegacyLens para registrar um projeto local.';
       } catch { status.textContent = 'Local LegacyLens host unavailable.'; }
       start.onclick = async () => {
         if (!select.value) return;
@@ -56,7 +63,7 @@ export default defineContentScript({
         } catch (error) { status.textContent = error instanceof Error ? error.message : 'Capture failed'; }
       };
       stop.onclick = async () => {
-        try { await ask({ type: 'capture.stop' }); session = undefined; selectedSource = ''; clickEventId = ''; window.dispatchEvent(new CustomEvent('legacylens:stop', { detail: { nonce } })); status.textContent = 'Capture stopped.'; }
+        try { const finished = session; await ask({ type: 'capture.stop' }); session = undefined; selectedSource = ''; clickEventId = ''; window.dispatchEvent(new CustomEvent('legacylens:stop', { detail: { nonce } })); status.textContent = 'Capture stopped. Opening investigation.'; if (finished) await ask({ type: 'investigation.open', projectId: finished.projectId, traceId: finished.id }); }
         catch { status.textContent = 'Could not stop capture; retry.'; }
       };
     };

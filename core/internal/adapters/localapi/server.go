@@ -24,10 +24,11 @@ const (
 )
 
 type Services struct {
-	Projects  *application.ProjectService
-	Indexer   *application.Indexer
-	Captures  *application.CaptureService
-	Locations *application.LocationService
+	Projects       *application.ProjectService
+	Indexer        *application.Indexer
+	Captures       *application.CaptureService
+	Investigations *application.InvestigationService
+	Locations      *application.LocationService
 }
 
 type AuthConfig struct {
@@ -356,14 +357,14 @@ func (s *server) execute(ctx context.Context, request envelope) (any, *apiError)
 			Offset    int       `json:"offset"`
 			Limit     int       `json:"limit"`
 		}
-		if err := decode(&payload); err != nil || payload.ProjectID == "" || !validTraceID(payload.TraceID) || s.services.Captures == nil {
+		if err := decode(&payload); err != nil || payload.ProjectID == "" || !validTraceID(payload.TraceID) || s.services.Investigations == nil {
 			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Investigation requires project and trace ids."}
 		}
 		offset, limit, pageErr := pageParams(payload.Offset, payload.Limit)
 		if pageErr != nil {
 			return nil, pageErr
 		}
-		investigation, err := s.services.Captures.Investigation(ctx, payload.ProjectID, payload.TraceID)
+		investigation, err := s.services.Investigations.Get(ctx, payload.ProjectID, payload.TraceID)
 		if err != nil {
 			return failed()
 		}

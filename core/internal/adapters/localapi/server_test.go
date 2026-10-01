@@ -188,9 +188,9 @@ func TestAPIInvestigationReturnsLaterPagesForEachCollection(t *testing.T) {
 		{ProjectID: "p1", TraceID: trace.ID, ProducerID: "agent", Sequence: 2, EventID: "e2", Kind: "http.request"},
 	}
 	loaded := application.Investigation{Project: domain.Project{ID: "p1"}, Trace: trace, Events: events,
-		Diagnostics: []domain.Diagnostic{{ID: "d1"}, {ID: "d2"}}, Symbols: []domain.Symbol{{ID: "s1"}, {ID: "s2"}}, Relations: []domain.Relation{{ID: "r1"}, {ID: "r2"}}}
+		Diagnostics: []domain.Diagnostic{{ID: "d1"}, {ID: "d2"}}, Symbols: []domain.Symbol{{ID: "s1"}, {ID: "s2"}}, Relations: []domain.Relation{{ID: "r1"}, {ID: "r2"}}, Evidence: []domain.Evidence{{ID: "v1"}, {ID: "v2"}}}
 	service := application.NewCaptureService(captureStoreStub{investigation: loaded}, application.CaptureConfig{})
-	handler := NewServer(Services{Captures: service}, AuthConfig{HostToken: "host", AgentToken: "agent"})
+	handler := NewServer(Services{Captures: service, Investigations: application.NewInvestigationService(captureStoreStub{investigation: loaded})}, AuthConfig{HostToken: "host", AgentToken: "agent"})
 	response := apiRequest(handler, "/v1/commands", "host", "", `{"protocolVersion":1,"requestId":"r1","command":"investigation.get","payload":{"projectId":"p1","traceId":"0123456789abcdef0123456789abcdef","offset":1,"limit":1}}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("investigation.get = %d %s", response.Code, response.Body)
@@ -205,7 +205,7 @@ func TestAPIInvestigationReturnsLaterPagesForEachCollection(t *testing.T) {
 	if result.Events.Items[0].EventID != "e2" || result.Events.Total != 2 || result.Events.HasMore {
 		t.Fatalf("event later page = %+v", result.Events)
 	}
-	if result.Diagnostics.Items[0].ID != "d2" || result.Symbols.Items[0].ID != "s2" || result.Relations.Items[0].ID != "r2" {
+	if result.Diagnostics.Items[0].ID != "d2" || result.Symbols.Total != 4 || result.Relations.Items[0].ID != "r2" || result.Evidence.Total != 4 || len(result.Evidence.Items) != 1 {
 		t.Fatalf("collections did not expose their later pages: %+v", result)
 	}
 }

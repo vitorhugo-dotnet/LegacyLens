@@ -72,6 +72,43 @@ func TestCaptureServicePersistsSanitizationDiagnostics(t *testing.T) {
 	}
 }
 
+func TestInvestigationLoadsIndexedStaticGraph(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(t.TempDir() + "/graph.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	project := domain.Project{ID: "p", Name: "p", Root: t.TempDir(), CreatedAt: time.Now().UTC()}
+	if err := store.SaveProject(ctx, project); err != nil {
+		t.Fatal(err)
+	}
+	result := application.IndexResult{ProjectID: "p", RevisionID: "r1",
+		Artifacts: []domain.Artifact{{ID: "a1", ProjectID: "p", RevisionID: "r1", Path: "page.xhtml", ContentHash: "hash"}},
+		Symbols:   []domain.Symbol{{ID: "s1", ProjectID: "p", RevisionID: "r1", ArtifactID: "a1", QualifiedName: "page.xhtml", Kind: "xhtml"}},
+		Relations: []domain.Relation{{ID: "r1", FromID: "s1", Kind: "navigation", Layer: domain.LayerStatic, Resolution: domain.ResolutionDynamic, EvidenceIDs: []domain.ID{"e1"}}}}
+	if err := store.CommitIndex(ctx, result); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartCapture(ctx, domain.Trace{ID: "t", ProjectID: "p", StartedAt: time.Now().UTC()}, "tab"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := store.Load(ctx, "p", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.Symbols) != 0 || len(raw.Relations) != 0 {
+		t.Fatal("capture persistence load unexpectedly fetched the indexed graph")
+	}
+	loaded, err := application.NewInvestigationService(store).Get(ctx, "p", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Symbols) != 1 || len(loaded.Relations) != 1 || loaded.Relations[0].Layer != domain.LayerStatic {
+		t.Fatalf("indexed graph absent or changed: symbols=%+v relations=%+v", loaded.Symbols, loaded.Relations)
+	}
+}
+
 func TestTraceCapturePersistsLifecycleEventsAndDiagnostics(t *testing.T) {
 	path := t.TempDir() + "/traces.db"
 	store, err := Open(path)

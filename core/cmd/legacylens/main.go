@@ -90,7 +90,7 @@ func runtimeServices(store *sqlite.Store) localapi.Services {
 	indexer := application.NewIndexer(store, store, filesystem.NewSource(), []application.Analyzer{xhtml.NewAnalyzer()})
 	captures := application.NewCaptureService(store, application.CaptureConfig{})
 	locations := application.NewLocationService(store, intellij.NewEditor(os.Getenv("LEGACYLENS_INTELLIJ_LAUNCHER"), nil))
-	return localapi.Services{Projects: projects, Indexer: indexer, Captures: captures, Locations: locations}
+	return localapi.Services{Projects: projects, Indexer: indexer, Captures: captures, Investigations: application.NewInvestigationService(store), Locations: locations}
 }
 
 func serve() error {
@@ -242,7 +242,7 @@ func inspectTrace(args []string) error {
 		return err
 	}
 	defer store.Close()
-	result, err := application.NewCaptureService(store, application.CaptureConfig{}).Investigation(context.Background(), domain.ID(*projectID), domain.ID(*traceID))
+	result, err := application.NewInvestigationService(store).Get(context.Background(), domain.ID(*projectID), domain.ID(*traceID))
 	if err != nil {
 		return errors.New("trace could not be inspected")
 	}
