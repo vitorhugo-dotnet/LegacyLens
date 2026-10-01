@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>LegacyLens async interaction fixture</title>
+<button id="save">Save</button>
+<button id="other">Other</button>
+<output id="result"></output>
+<script>
+  function fetchResult(label) {
+    return fetch('/fixture/echo?label=' + encodeURIComponent(label))
+      .then(() => { document.querySelector('#result').textContent += label; });
+  }
+  function second(label) { return fetchResult(label); }
+  function first(label) { setTimeout(() => second(label), 0); }
+  document.querySelector('#save').addEventListener('click', () => first('A'));
+  document.querySelector('#other').addEventListener('click', () => first('B'));
+  // Registered before a capture starts: polling must remain unlinked.
+  setInterval(() => fetchResult('poll'), 5000);
+</script>
+</html>

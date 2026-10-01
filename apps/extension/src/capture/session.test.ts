@@ -2,6 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { CaptureController } from './session.ts';
 
 describe('CaptureController', () => {
+  it('writes the selected click as the network event parent in the ingested protocol', async () => {
+    const events: Array<{ eventId: string; parentEventId?: string; kind: string }> = [];
+    const controller = new CaptureController({ request: async <T>(command: string, payload: unknown): Promise<T> => {
+      if (command === 'capture.start') return { id: 'a'.repeat(32), projectId: 'project', startedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() } as T;
+      if (command === 'trace.ingest') events.push(...(payload as { events: typeof events }).events);
+      return {} as T;
+    } });
+    await controller.start({ projectId: 'project', tabId: 8, origin: 'https://app.example' });
+    await controller.record(8, 'jsf.click', { source: 'save' }, { eventId: '1'.repeat(16) });
+    await controller.record(8, 'browser.network', { source: 'save', spanId: '2'.repeat(16) }, { parentEventId: '1'.repeat(16) });
+    expect(events).toMatchObject([{ eventId: '1'.repeat(16), kind: 'jsf.click' },
+      { parentEventId: '1'.repeat(16), kind: 'browser.network' }]);
+  });
   it('keeps tabs isolated and permits only one capture per tab', async () => {
     const starts: string[] = [];
     const controller = new CaptureController({

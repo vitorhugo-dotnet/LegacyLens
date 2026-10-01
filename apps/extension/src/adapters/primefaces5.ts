@@ -13,6 +13,8 @@ export interface PageCaptureContext {
   nextSpanId: () => string;
   onAjax: (action: AjaxAction) => void;
   onDiagnostic?: (code: string) => void;
+  onNetwork?: (effect: import('../capture/network.ts').NetworkEffect) => void;
+  withInteraction?: <T>(source: string, fn: () => T) => T;
 }
 
 type XHRLike = { setRequestHeader(name: string, value: string): unknown; send(...args: unknown[]): unknown };
@@ -58,7 +60,11 @@ export class PrimeFacesAdapter {
       const source = typeof cfg?.source === 'string' ? cfg.source : typeof cfg?.s === 'string' ? cfg.s : undefined;
       const previous = adapter.invoking;
       if (source && source === adapter.selected) adapter.invoking = source;
-      try { return Reflect.apply(originalHandle, this, args); }
+      try {
+        const invoke = () => Reflect.apply(originalHandle, this, args);
+        return source && source === adapter.selected && context.withInteraction
+          ? context.withInteraction(source, invoke) : invoke();
+      }
       finally { adapter.invoking = previous; }
     };
     request.handle = wrappedHandle;

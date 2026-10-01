@@ -4,6 +4,7 @@ import type { CommandClient } from '../native/client.ts';
 export interface CaptureRequest { projectId: string; tabId: number; origin: string }
 export interface ActiveCapture { request: CaptureRequest; session: CaptureSession; producerId: string; sequence: number; gap: boolean }
 export interface SessionStore { load(): Promise<ActiveCapture[]>; save(captures: ActiveCapture[]): Promise<void> }
+export interface EventIdentity { eventId?: string; parentEventId?: string }
 
 function randomHex(bytes: number): string {
   return [...crypto.getRandomValues(new Uint8Array(bytes))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -78,15 +79,18 @@ export class CaptureController {
     } finally { this.stopping.delete(tabId); }
   }
 
-  async record(tabId: number, kind: string, metadata: Record<string, string>): Promise<void> {
+  async record(tabId: number, kind: string, metadata: Record<string, string>, identity: EventIdentity = {}): Promise<void> {
     if (this.stopping.has(tabId)) throw new Error('Capture is stopping');
+    for (const id of [identity.eventId, identity.parentEventId]) {
+      if (id !== undefined && (!/^[a-f0-9]{16}$/i.test(id) || /^0+$/.test(id))) throw new Error('Invalid capture event identity');
+    }
     const previous = this.recording.get(tabId) ?? Promise.resolve();
-    const next = previous.catch(() => {}).then(() => this.recordNow(tabId, kind, metadata));
+    const next = previous.catch(() => {}).then(() => this.recordNow(tabId, kind, metadata, identity));
     this.recording.set(tabId, next);
     try { await next; } finally { if (this.recording.get(tabId) === next) this.recording.delete(tabId); }
   }
 
-  private async recordNow(tabId: number, kind: string, metadata: Record<string, string>): Promise<void> {
+  private async recordNow(tabId: number, kind: string, metadata: Record<string, string>, identity: EventIdentity): Promise<void> {
     await this.restore();
     const entry = this.captures.get(tabId);
     if (!entry || Date.parse(entry.session.expiresAt) <= Date.now()) return;
@@ -96,7 +100,7 @@ export class CaptureController {
         entry.gap = false;
         await this.persist();
       }
-      await this.sendEvent(entry, kind, metadata);
+      await this.sendEvent(entry, kind, metadata, identity);
     } catch {
       entry.gap = true;
       await this.persist();
@@ -104,9 +108,10 @@ export class CaptureController {
     }
   }
 
-  private async sendEvent(entry: ActiveCapture, kind: string, metadata: Record<string, string>): Promise<void> {
+  private async sendEvent(entry: ActiveCapture, kind: string, metadata: Record<string, string>, identity: EventIdentity = {}): Promise<void> {
     const event: Event = { projectId: entry.request.projectId, traceId: entry.session.id, producerId: entry.producerId,
-      sequence: ++entry.sequence, eventId: randomHex(8), kind, occurredAt: new Date().toISOString(), metadata };
+      sequence: ++entry.sequence, eventId: identity.eventId ?? randomHex(8), ...(identity.parentEventId ? { parentEventId: identity.parentEventId } : {}),
+      kind, occurredAt: new Date().toISOString(), metadata };
     await this.persist();
     await this.client.request('trace.ingest', { projectId: entry.request.projectId, events: [event] });
   }

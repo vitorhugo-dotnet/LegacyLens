@@ -44,15 +44,22 @@ export default defineBackground(() => {
         await controller.restore();
         const active = controller.get(tabId);
         if (!active || active.session.id !== msg.sessionId || active.request.origin !== senderOrigin) throw new Error('Unmatched capture event');
-        if (!['jsf.click', 'primefaces.ajax', 'primefaces.propagation_attempt', 'extension.diagnostic'].includes(msg.kind)) throw new Error('Unsupported event kind');
+        if (!['jsf.click', 'primefaces.ajax', 'primefaces.propagation_attempt', 'browser.network', 'browser.propagation_attempt', 'extension.diagnostic'].includes(msg.kind)) throw new Error('Unsupported event kind');
         const metadata = msg.metadata;
         if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('Invalid event metadata');
         const safe: Record<string, string> = {};
-        for (const key of ['source', 'code', 'spanId']) {
+        for (const key of ['source', 'code', 'spanId', 'transport', 'frameChain', 'stackGap']) {
           const value = (metadata as Record<string, unknown>)[key];
           if (typeof value === 'string' && value.length <= 256) safe[key] = value;
         }
-        await controller.record(tabId, msg.kind, safe);
+        const eventId = typeof msg.eventId === 'string' ? msg.eventId : undefined;
+        const parentEventId = typeof msg.parentEventId === 'string' ? msg.parentEventId : undefined;
+        if (msg.kind === 'jsf.click' && !eventId) throw new Error('Missing click identity');
+        if (msg.kind !== 'jsf.click' && msg.kind !== 'extension.diagnostic' && !parentEventId) throw new Error('Missing interaction parent');
+        if (safe.spanId && (!/^[a-f0-9]{16}$/i.test(safe.spanId) || /^0+$/.test(safe.spanId))) throw new Error('Invalid span identity');
+        if (msg.kind === 'browser.network' && (!safe.spanId || !['fetch', 'xhr'].includes(safe.transport ?? ''))) throw new Error('Invalid network effect');
+        if (msg.kind === 'browser.propagation_attempt' && safe.spanId) throw new Error('Unverified span identity');
+        await controller.record(tabId, msg.kind, safe, { ...(eventId ? { eventId } : {}), ...(parentEventId ? { parentEventId } : {}) });
         return { accepted: true, gap: active.gap };
       }
       throw new Error('Unsupported capture message');
