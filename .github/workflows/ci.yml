@@ -30,6 +30,8 @@ jobs:
       - name: Build and test contracts and extension
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           npm ci
           npm test --workspace packages/contracts
           npm run typecheck --workspace apps/extension
@@ -38,16 +40,41 @@ jobs:
       - name: Test Go core
         run: go test ./...
         working-directory: core
-      - name: Test Java 8 compatible agent
-        run: mvn -B -f java/pom.xml -pl agent -am verify
+      - name: Test Java 8 runtime
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with:
+          distribution: temurin
+          java-version: '8'
+      - name: Verify and test agent on Java 8
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ((java -version 2>&1 | Select-Object -First 1) -notmatch '1\.8\.') { throw 'Expected Java 8 runtime.' }
+          mvn -B -f java/pom.xml -pl agent -am verify
+      - name: Test Java 21 runtime
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Verify and test agent on Java 21
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ((java -version 2>&1 | Select-Object -First 1) -notmatch '21\.') { throw 'Expected Java 21 runtime.' }
+          mvn -B -f java/pom.xml -pl agent -am verify
       - name: Test legacy fixture and end-to-end browser flow
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           mvn -B -f fixtures/legacy/pom.xml verify
+          npm exec --workspace tests/e2e -- playwright install chromium
           npm test --workspace tests/e2e
       - name: Build Windows x64 package
         shell: pwsh
-        run: ./scripts/package-release.ps1 -OutputDirectory artifacts
+        run: ./scripts/package-release.ps1 -OutputDirectory artifacts -VerifiedChecks @('contracts','extension','core','java8-runtime','java21-runtime','legacy-fixture','legacy-e2e')
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

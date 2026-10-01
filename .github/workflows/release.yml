@@ -30,8 +30,32 @@ jobs:
         run: |
           $tagCommit = git rev-list -n 1 $env:GITHUB_REF
           if ($tagCommit -ne $env:GITHUB_SHA) { throw 'Tag SHA differs from checked and verified SHA.' }
-          if (-not (Test-Path artifacts/legacylens-windows-x64.zip)) { throw 'Required Windows package is missing.' }
-          if (-not (Test-Path artifacts/SHA256SUMS.txt)) { throw 'Package checksums are missing.' }
+          $zip = 'artifacts/legacylens-windows-x64.zip'
+          $checksums = 'artifacts/SHA256SUMS.txt'
+          if (-not (Test-Path $zip)) { throw 'Required Windows package is missing.' }
+          if (-not (Test-Path $checksums)) { throw 'Package checksums are missing.' }
+          $checksumLine = (Get-Content $checksums -Raw).Trim()
+          if ($checksumLine -notmatch '^([0-9a-fA-F]{64})\s+legacylens-windows-x64\.zip$') { throw 'Checksum file does not identify the expected package.' }
+          $expectedHash = $Matches[1].ToLowerInvariant()
+          $actualHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expectedHash -notmatch '^[0-9a-f]{64}$' -or $expectedHash -ne $actualHash) { throw 'Package SHA-256 does not match its checksum file.' }
+          $expandedPath = Join-Path $env:TEMP 'legacylens-release-assets'
+          if (Test-Path $expandedPath) { Remove-Item -LiteralPath $expandedPath -Recurse -Force }
+          Expand-Archive -LiteralPath $zip -DestinationPath $expandedPath -Force
+          $manifestPath = Join-Path $expandedPath 'release-manifest.json'
+          if (-not (Test-Path $manifestPath)) { throw 'Release manifest is missing from package.' }
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          if ($manifest.commit -ne $env:GITHUB_SHA -or $manifest.version -ne $env:GITHUB_REF_NAME) { throw 'Manifest provenance does not match tag SHA and version.' }
+          if ($manifest.protocolVersion -ne 1 -or $manifest.platform -ne 'windows/amd64') { throw 'Manifest protocol or platform is unsupported.' }
+          if ($manifest.componentVersions.core -ne $env:GITHUB_SHA -or $manifest.componentVersions.nativeHost -ne $env:GITHUB_SHA) { throw 'Core and native-host provenance does not match the tag SHA.' }
+          if (-not $manifest.componentVersions.extension -or -not $manifest.componentVersions.javaAgent -or -not $manifest.componentVersions.javaRuntime -or -not $manifest.componentVersions.goToolchain -or -not $manifest.componentVersions.nodeToolchain) { throw 'Manifest is missing component or toolchain versions.' }
+          $extensionManifest = Get-Content (Join-Path $expandedPath 'extension/manifest.json') -Raw | ConvertFrom-Json
+          if ($extensionManifest.version -ne $manifest.componentVersions.extension) { throw 'Extension manifest version does not match package provenance.' }
+          $requiredChecks = @('contracts','extension','core','java8-runtime','java21-runtime','legacy-fixture','legacy-e2e','packaged-core-smoke')
+          foreach ($check in $requiredChecks) { if ($manifest.verificationResults.$check -ne 'passed') { throw "Required verification is missing or not passed: $check" } }
+          if ($manifest.releasePrerequisites.task11JavaWorker -ne 'complete' -or $manifest.releasePrerequisites.task17ModernFixture -ne 'complete') { throw 'Release is blocked until Task11 Java worker and Task17 modern fixture assets and checks are complete.' }
+          foreach ($asset in $manifest.releasePrerequisites.requiredAssets) { if (-not (Test-Path (Join-Path $expandedPath $asset))) { throw "Required release asset is missing: $asset" } }
+          foreach ($file in @('legacylens.exe','legacylens-host.exe','agent/legacylens-agent.jar','extension/manifest.json','LICENSE','README.md')) { if (-not (Test-Path (Join-Path $expandedPath $file))) { throw "Package is missing required file: $file" } }
       - name: Publish verified assets
         env:
           GH_TOKEN: ${{ github.token }}
