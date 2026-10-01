@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -27,6 +28,7 @@ type Services struct {
 	Projects       *application.ProjectService
 	Indexer        *application.Indexer
 	Captures       *application.CaptureService
+	Presence       *application.AgentPresence
 	Investigations *application.InvestigationService
 	Locations      *application.LocationService
 }
@@ -128,9 +130,19 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, parseErr.status, parseErr.code, parseErr.message, requestIDFromBody(body))
 		return
 	}
-	if r.URL.Path == "/v1/events" && request.Command != "trace.ingest" {
-		writeError(w, http.StatusBadRequest, "INVALID_PAYLOAD", "The events endpoint accepts trace.ingest only.", request.RequestID)
+	if r.URL.Path == "/v1/events" && request.Command != "trace.ingest" && request.Command != "agent.heartbeat" {
+		writeError(w, http.StatusBadRequest, "INVALID_PAYLOAD", "The events endpoint accepts agent commands only.", request.RequestID)
 		return
+	}
+	if request.Command == "agent.heartbeat" {
+		if r.URL.Path != "/v1/events" || s.services.Presence == nil { writeError(w,http.StatusBadRequest,"INVALID_PAYLOAD","Agent heartbeat is unavailable.",request.RequestID); return }
+		var payload struct { ProjectID domain.ID `json:"projectId"`; ProducerID domain.ID `json:"producerId"` }
+		decoder := json.NewDecoder(bytes.NewReader(request.Payload)); decoder.DisallowUnknownFields()
+		if decoder.Decode(&payload) != nil || decoder.Decode(new(any)) != io.EOF || !safePresenceID.MatchString(string(payload.ProjectID)) || !safePresenceID.MatchString(string(payload.ProducerID)) {
+			writeError(w,http.StatusBadRequest,"INVALID_PAYLOAD","Agent heartbeat identity is invalid.",request.RequestID); return
+		}
+		if err := s.services.Presence.Heartbeat(payload.ProjectID,payload.ProducerID); err != nil { writeError(w,http.StatusServiceUnavailable,"AGENT_PRESENCE_LIMIT","Agent presence is unavailable.",request.RequestID); return }
+		writeResponse(w,http.StatusOK,response{ProtocolVersion:protocolVersion,RequestID:request.RequestID,Result:map[string]bool{"accepted":true}}); return
 	}
 	result, failure := s.execute(r.Context(), request)
 	if failure != nil {
@@ -139,6 +151,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	writeResponse(w, http.StatusOK, response{ProtocolVersion: protocolVersion, RequestID: request.RequestID, Result: result})
 }
+
+var safePresenceID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
 type apiError struct {
 	status  int

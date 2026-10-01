@@ -90,7 +90,8 @@ func runtimeServices(store *sqlite.Store) localapi.Services {
 	indexer := application.NewIndexer(store, store, filesystem.NewSource(), []application.Analyzer{xhtml.NewAnalyzer()})
 	captures := application.NewCaptureService(store, application.CaptureConfig{})
 	locations := application.NewLocationService(store, intellij.NewEditor(os.Getenv("LEGACYLENS_INTELLIJ_LAUNCHER"), nil))
-	return localapi.Services{Projects: projects, Indexer: indexer, Captures: captures, Investigations: application.NewInvestigationService(store), Locations: locations}
+	presence := application.NewAgentPresence(time.Now, 15*time.Second, 128)
+	return localapi.Services{Projects: projects, Indexer: indexer, Captures: captures, Presence: presence, Investigations: application.NewInvestigationService(store).WithAgentPresence(presence), Locations: locations}
 }
 
 func serve() error {

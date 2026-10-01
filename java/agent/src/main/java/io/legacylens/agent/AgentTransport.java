@@ -16,7 +16,7 @@ public final class AgentTransport {
     static final int DEFAULT_QUEUE_CAPACITY = 4096;
     static final int DEFAULT_TRACE_STATE_CAPACITY = 4096;
     private static final String PROCESS_NONCE = TraceContext.hex(8);
-    private static final AtomicLong PRODUCER_EPOCH = new AtomicLong();
+    private static final long HEARTBEAT_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(2L);
     private static final long CAPACITY_DIAGNOSTIC_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1L);
 
     private static final class PendingEvent {
@@ -48,9 +48,12 @@ public final class AgentTransport {
     private long nextCapacityDiagnosticAtNanos;
     private volatile boolean closed;
     private volatile boolean recoveryDiagnostic;
+    private final String processProducerId;
+    private long lastHeartbeatNanos;
 
     private AgentTransport(AgentConfig config, int queueCapacity, int traceStateCapacity, boolean background, Runnable afterLossPostedForTesting) {
         this.config = config;
+        this.processProducerId = config == null ? "producer-test-" + PROCESS_NONCE : config.producerId + "-" + PROCESS_NONCE;
         this.queue = new ArrayBlockingQueue<PendingEvent>(queueCapacity);
         this.traceStateCapacity = traceStateCapacity;
         this.afterLossPostedForTesting = afterLossPostedForTesting;
@@ -77,6 +80,8 @@ public final class AgentTransport {
         return new AgentTransport(config, queueCapacity, traceStateCapacity, true, afterLossPosted);
     }
 
+    String producerId() { return processProducerId; }
+
     TraceState acquireTrace(String traceId, String configuredProducerId) {
         synchronized (stateLock) {
             TraceState state = traceStates.get(traceId);
@@ -88,7 +93,7 @@ public final class AgentTransport {
                 recordCapacityRejection();
                 return null;
             }
-            String producerId = configuredProducerId + "-" + PROCESS_NONCE + "-" + PRODUCER_EPOCH.incrementAndGet();
+            String producerId = processProducerId;
             state = new TraceState(traceId, producerId);
             state.activeContexts = 1;
             traceStates.put(traceId, state);
@@ -194,6 +199,7 @@ public final class AgentTransport {
         while (!closed) {
             PendingEvent pending = null;
             try {
+                heartbeatIfDue();
                 pending = queue.poll(100, TimeUnit.MILLISECONDS);
                 reportCapacityRejections();
                 if (pending == null) {
@@ -212,6 +218,25 @@ public final class AgentTransport {
                 if (pending != null) failEvent(pending.state);
             }
         }
+    }
+
+    private void heartbeatIfDue() {
+        if (config == null) return;
+        long now = System.nanoTime();
+        if (lastHeartbeatNanos != 0 && now-lastHeartbeatNanos < HEARTBEAT_INTERVAL_NANOS) return;
+        lastHeartbeatNanos = now;
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL(config.endpoint).openConnection();
+            connection.setConnectTimeout(250); connection.setReadTimeout(250); connection.setInstanceFollowRedirects(false);
+            connection.setRequestMethod("POST"); connection.setDoOutput(true);
+            connection.setRequestProperty("Authorization", "Bearer " + config.token);
+            connection.setRequestProperty("Content-Type", "application/json");
+            String body = "{\"protocolVersion\":1,\"requestId\":"+Event.q(TraceContext.hex(8))+",\"command\":\"agent.heartbeat\",\"payload\":{\"projectId\":"+Event.q(config.projectId)+",\"producerId\":"+Event.q(processProducerId)+"}}";
+            try (OutputStream output = connection.getOutputStream()) { output.write(body.getBytes("UTF-8")); }
+            connection.getResponseCode();
+        } catch (Exception ignored) { }
+        finally { if (connection != null) connection.disconnect(); }
     }
 
     private void reportCapacityRejections() {

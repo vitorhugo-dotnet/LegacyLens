@@ -85,6 +85,18 @@ func TestAPIUsesSeparateAgentCredential(t *testing.T) {
 	}
 }
 
+func TestAPIAgentHeartbeatRequiresAgentCredentialAndStrictIdentity(t *testing.T) {
+ now := time.Date(2026,10,1,12,0,0,0,time.UTC)
+ presence := application.NewAgentPresence(func() time.Time { return now },5*time.Second,2)
+ handler := NewServer(Services{Presence:presence},AuthConfig{HostToken:"host-secret-token",AgentToken:"agent-secret-token"})
+ body := `{"protocolVersion":1,"requestId":"beat","command":"agent.heartbeat","payload":{"projectId":"p1","producerId":"process-a"}}`
+ if got := apiRequest(handler,"/v1/events","host-secret-token","",body).Code; got != http.StatusUnauthorized { t.Fatalf("host credential accepted: %d",got) }
+ if got := apiRequest(handler,"/v1/commands","host-secret-token","",body).Code; got == http.StatusOK { t.Fatalf("host command accepted heartbeat: %d",got) }
+ if got := apiRequest(handler,"/v1/events","agent-secret-token","",body).Code; got != http.StatusOK { t.Fatalf("agent heartbeat: %d",got) }
+ extra := `{"protocolVersion":1,"requestId":"beat","command":"agent.heartbeat","payload":{"projectId":"p1","producerId":"process-a","token":"secret"}}`
+ if got := apiRequest(handler,"/v1/events","agent-secret-token","",extra).Code; got != http.StatusBadRequest { t.Fatalf("extra field accepted: %d",got) }
+}
+
 func TestAPIRejectsInvalidPayloadAndSharedCredentials(t *testing.T) {
 	invalid := apiRequest(testServer(), "/v1/commands", "host-secret-token", "", `{"protocolVersion":1,"requestId":"r1","command":"project.register","payload":{"root":42}}`)
 	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), `"code":"INVALID_PAYLOAD"`) {

@@ -1,0 +1,8 @@
+{
+  "java": {"version":"8u462-b08","url":"https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u462-b08/OpenJDK8U-jdk_x64_windows_hotspot_8u462b08.zip","sha256":"c6c2d8e6c2cbf0b4ddb707e6edb9a00d8a7b04e9ed6dda7e62d43dc4d83d342c"},
+  "wildfly": {"version":"10.0.0.Final","url":"https://download.jboss.org/wildfly/10.0.0.Final/wildfly-10.0.0.Final.zip","sha256":"3f3577ddf7f9aeb9bcef2c5f3cc47dec896ac2ac421e773cc0a21605a5e557e9"},
+  "mysql": {"version":"5.7.44","image":"mysql@sha256:4bc6bc963e6d8443453676cae56536f4b8156d78bae03c0145cbe47c2aad73bb"},
+  "jsf": {"version":"2.2","source":"WildFly 10 provided module"},
+  "primefaces": {"version":"5.3","source":"fixtures/legacy/pom.xml"},
+  "connectorJ": {"version":"5.1.49","source":"fixtures/legacy/pom.xml"}
+}

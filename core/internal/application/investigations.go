@@ -12,11 +12,13 @@ import (
 
 // InvestigationService materializes only causal links carried by recorded events.
 // Indexed relations retain their original layer and resolution.
-type InvestigationService struct{ traces TraceStore }
+type InvestigationService struct{ traces TraceStore; presence *AgentPresence }
 
 func NewInvestigationService(traces TraceStore) *InvestigationService {
 	return &InvestigationService{traces: traces}
 }
+
+func (s *InvestigationService) WithAgentPresence(p *AgentPresence) *InvestigationService { s.presence = p; return s }
 
 func (s *InvestigationService) Get(ctx context.Context, projectID, traceID domain.ID) (Investigation, error) {
 	if s == nil || s.traces == nil {
@@ -45,6 +47,12 @@ func (s *InvestigationService) Get(ctx context.Context, projectID, traceID domai
 	}
 	if value.AgentStatus.State == "" {
 		value.AgentStatus.State = "unknown"
+	}
+	if s.presence != nil {
+		expected := make([]domain.ID, 0)
+		for _, event := range value.Events { if event.Kind == "http.server" { expected = append(expected,event.ProducerID) } }
+		value.AgentStatus = s.presence.Status(projectID, expected)
+		if value.AgentStatus.EvidenceDiagnosticID != "" { value.Diagnostics = append(value.Diagnostics,s.presence.Diagnostic(value.AgentStatus)) }
 	}
 
 	byEventID := map[domain.ID][]domain.Event{}
@@ -128,7 +136,30 @@ func (s *InvestigationService) Get(ctx context.Context, projectID, traceID domai
 		}
 		value.Relations = append(value.Relations, relation)
 	}
+	requestEvents := map[string][]domain.Event{}
+	serverEvents := map[string][]domain.Event{}
+	for _, event := range value.Events {
+		if event.Kind == "browser.network" || event.Kind == "primefaces.ajax" {
+			if validRequestSpan(event.Metadata["spanId"]) { requestEvents[event.Metadata["spanId"]] = append(requestEvents[event.Metadata["spanId"]],event) }
+		}
+		if event.Kind == "http.server" && validRequestSpan(event.Metadata["http.request_span"]) { serverEvents[event.Metadata["http.request_span"]] = append(serverEvents[event.Metadata["http.request_span"]],event) }
+	}
+	for span, servers := range serverEvents {
+		browsers := requestEvents[span]
+		if len(servers) != 1 || len(browsers) != 1 { continue }
+		from := ids[string(browsers[0].ProducerID)+"\x00"+string(browsers[0].EventID)]
+		to := ids[string(servers[0].ProducerID)+"\x00"+string(servers[0].EventID)]
+		if from == "" || to == "" { continue }
+		value.Relations = append(value.Relations,domain.Relation{ID:stableID("http.request",string(projectID),string(traceID),span),FromID:from,ToID:&to,Kind:"http.request",EvidenceIDs:[]domain.ID{from,to},Resolution:domain.ResolutionResolved,Layer:domain.LayerObserved})
+	}
 	return value, nil
+}
+
+func validRequestSpan(span string) bool {
+	if len(span) != 16 { return false }
+	nonzero := false
+	for _, c := range span { if c != '0' { nonzero = true }; if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) { return false } }
+	return nonzero
 }
 
 func addInvestigationDiagnostic(value *Investigation, code, message string, event domain.Event) {

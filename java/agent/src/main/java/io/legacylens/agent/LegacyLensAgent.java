@@ -116,6 +116,7 @@ public final class LegacyLensAgent {
         if (state == null) return false;
         TraceContext.begin(trace, parent, state);
         Map<String, String> metadata = new LinkedHashMap<String, String>();
+        metadata.put("http.request_span",parent);
         try {
             String method = String.valueOf(request.getClass().getMethod("getMethod").invoke(request));
             if (method.matches("[A-Z]{1,12}")) metadata.put("http.method", method);

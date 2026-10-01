@@ -2,9 +2,10 @@ package io.legacylens.agent;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.concurrent.ThreadLocalRandom;
+import java.security.SecureRandom;
 
 public final class TraceContext {
+    private static final SecureRandom RANDOM = new SecureRandom();
     private static final ThreadLocal<Deque<TraceContext>> CURRENT=new ThreadLocal<Deque<TraceContext>>();
     public final String traceId, spanId, parentSpanId;
     final AgentTransport.TraceState state;
@@ -18,6 +19,7 @@ public final class TraceContext {
     static String parentEventId(){TraceContext c=current();return c==null?null:c.currentEventId();}
     private String currentEventId(){return eventStack.isEmpty()?inheritedParentEventId:eventStack.peek();}
     static TraceContext end(){Deque<TraceContext>d=CURRENT.get();if(d==null)return null;TraceContext c=d.isEmpty()?null:d.pop();if(d.isEmpty())CURRENT.remove();return c;}
-    static String hex(int bytes){byte[] b=new byte[bytes];ThreadLocalRandom.current().nextBytes(b);StringBuilder s=new StringBuilder();for(byte v:b)s.append(String.format("%02x",v&255));return s.toString();}
+    static String hex(int bytes){byte[] b=new byte[bytes];do { RANDOM.nextBytes(b); } while(allZero(b));StringBuilder s=new StringBuilder();for(byte v:b)s.append(String.format("%02x",v&255));return s.toString();}
+    private static boolean allZero(byte[] b){for(byte value:b)if(value!=0)return false;return true;}
     static boolean validTraceparent(String v){return v!=null&&v.matches("00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}")&&!v.substring(3,35).matches("0{32}")&&!v.substring(36,52).matches("0{16}");}
 }

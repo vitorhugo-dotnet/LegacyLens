@@ -41,6 +41,16 @@ func TestSanitizeMetadata(t *testing.T) {
 	}
 }
 
+func TestSanitizeRequestSpanRequiresNonzeroLowerHexAndDropsSecrets(t *testing.T) {
+ clean,_ := SanitizeMetadata(map[string]string{"spanId":"abcdef0123456789","http.request_span":"1234567890abcdef","traceparent":"00-secret","authorization":"Bearer secret","http.route":"/orders?token=secret"})
+ if clean["spanId"] != "abcdef0123456789" || clean["http.request_span"] != "1234567890abcdef" { t.Fatalf("request identities lost: %#v",clean) }
+ for _, key := range []string{"traceparent","authorization","http.route"} { if _, ok := clean[key]; ok { t.Fatalf("unsafe %s retained: %#v",key,clean) } }
+ for _, bad := range []string{"0000000000000000","ABCDEF0123456789","abc","abcdef0123456789?token=secret"} {
+  invalid,_ := SanitizeMetadata(map[string]string{"spanId":bad,"http.request_span":bad})
+  if len(invalid) != 0 { t.Fatalf("invalid span %q retained: %#v",bad,invalid) }
+ }
+}
+
 func TestSanitizeMetadataKeepsStructuredJavaMethodIdentity(t *testing.T) {
 	input := map[string]string{
 		"code.class":        "com.example.OrderService",

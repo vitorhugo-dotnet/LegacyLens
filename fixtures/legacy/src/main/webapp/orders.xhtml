@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:h="http://java.sun.com/jsf/html" xmlns:p="http://primefaces.org/ui">
+<h:head><title>Legacy orders fixture</title></h:head><h:body>
+  <h:form id="orderForm">
+    <h:inputText id="note" value="#{orderBean.note}" />
+    <p:commandButton id="saveOrder" value="Save order" actionListener="#{orderBean.save}" update="result" onclick="fetch('orders.xhtml');" />
+    <h:panelGroup id="result"><h:outputText id="message" value="#{orderBean.message}" /><h:outputText id="count" value="#{orderBean.orderCount}" /></h:panelGroup>
+  </h:form>
+  <button type="button" id="domOnly" onclick="this.textContent='DOM changed'">DOM only</button>
+  <script type="text/javascript">window.setInterval(function(){fetch('orders.xhtml');},750);</script>
+</h:body></html>

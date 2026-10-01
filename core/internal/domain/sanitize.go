@@ -20,6 +20,7 @@ var (
 	javaDeployment    = regexp.MustCompile(`^[A-Za-z0-9_$.-]{1,128}@loader-[a-fA-F0-9]{1,16}$`)
 	javaLine          = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 	agentDroppedCount = regexp.MustCompile(`^[1-9][0-9]{0,17}$`)
+	requestSpan = regexp.MustCompile(`^[0-9a-f]{16}$`)
 )
 
 // SanitizeMetadata keeps only low-risk, structured request and database metadata.
@@ -31,6 +32,7 @@ func SanitizeMetadata(input map[string]string) (map[string]string, []Diagnostic)
 		"code.class": true, "code.method": true, "code.descriptor": true,
 		"code.deployment": true, "code.line": true, "code.line_missing": true,
 		"agent.dropped_count": true,
+		"spanId": true, "http.request_span": true,
 	}
 	clean := make(map[string]string)
 	dropped := make([]string, 0)
@@ -59,6 +61,7 @@ func validMetadataValue(key, value string) bool {
 	if strings.HasPrefix(key, "code.") {
 		return validStructuredMetadata(key, value)
 	}
+	if key == "spanId" || key == "http.request_span" { return requestSpan.MatchString(value) && value != "0000000000000000" }
 	return safeMetadataValue.MatchString(value)
 }
 

@@ -27,6 +27,7 @@ class AgentFlowTest {
         Event http=observed.stream().filter(e->e.kind.equals("http.server")).findFirst().get();
         Event methodStart=observed.stream().filter(e->e.kind.equals("method.start")&&"load".equals(e.metadata.get("code.method"))).findFirst().get();
         assertEquals("GET",http.metadata.get("http.method"));
+        assertEquals("0123456789abcdef",http.metadata.get("http.request_span"));
         assertNull(http.parentEventId);
         assertEquals(http.eventId,methodStart.parentEventId,"application method must be causally nested in HTTP request");
         assertEquals(methodStart.eventId,jdbc.parentEventId,"JDBC call must be causally nested in application method");
@@ -35,6 +36,13 @@ class AgentFlowTest {
         long expectedSequence=1;for(Event event:observed){assertEquals("p1",event.projectId);assertEquals("0123456789abcdef0123456789abcdef",event.traceId);assertEquals(expectedSequence++,event.sequence);assertTrue(event.occurredAt.endsWith("Z"));assertFalse(event.toJson().contains(secret));}
         assertEquals("5",terminal.metadata.get("code.line"),"debug line table must be captured when present");
         assertFalse(terminal.metadata.containsKey("code.line_missing"));
+    }
+    @Test void generatedTraceAndSpanIdsHaveW3cShape() {
+        for(int i=0;i<32;i++){
+            String trace=TraceContext.hex(16),span=TraceContext.hex(8);
+            assertTrue(trace.matches("[0-9a-f]{32}")&&!trace.matches("0{32}"));
+            assertTrue(span.matches("[0-9a-f]{16}")&&!span.matches("0{16}"));
+        }
     }
     @Test void noDebugLineHasExplicitAbsence() throws Exception {
         AgentTransport transport=AgentTransport.forTesting(16);LegacyLensAgent.installForTesting(ByteBuddyAgent.install(),transport,AgentConfig.forTesting("sample.app"));
