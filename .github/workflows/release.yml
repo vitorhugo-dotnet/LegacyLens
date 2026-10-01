@@ -1,0 +1,38 @@
+name: Release
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: read
+jobs:
+  required-checks:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+  publish:
+    needs: required-checks
+    if: ${{ always() && needs.required-checks.result == 'success' }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: legacylens-windows-x64-${{ github.sha }}
+          path: artifacts
+      - name: Verify tag points to built commit
+        shell: pwsh
+        run: |
+          $tagCommit = git rev-list -n 1 $env:GITHUB_REF
+          if ($tagCommit -ne $env:GITHUB_SHA) { throw 'Tag SHA differs from checked and verified SHA.' }
+          if (-not (Test-Path artifacts/legacylens-windows-x64.zip)) { throw 'Required Windows package is missing.' }
+          if (-not (Test-Path artifacts/SHA256SUMS.txt)) { throw 'Package checksums are missing.' }
+      - name: Publish verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME artifacts/legacylens-windows-x64.zip artifacts/SHA256SUMS.txt --verify-tag --generate-notes

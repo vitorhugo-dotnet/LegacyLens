@@ -1,0 +1,57 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  checks:
+    name: Required checks (same commit)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
+        with:
+          go-version: 1.26.2
+          cache-dependency-path: core/go.sum
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.15.0
+          cache: npm
+      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build and test contracts and extension
+        shell: pwsh
+        run: |
+          npm ci
+          npm test --workspace packages/contracts
+          npm run typecheck --workspace apps/extension
+          npm test --workspace apps/extension
+          npm run build --workspace apps/extension
+      - name: Test Go core
+        run: go test ./...
+        working-directory: core
+      - name: Test Java 8 compatible agent
+        run: mvn -B -f java/pom.xml -pl agent -am verify
+      - name: Test legacy fixture and end-to-end browser flow
+        shell: pwsh
+        run: |
+          mvn -B -f fixtures/legacy/pom.xml verify
+          npm test --workspace tests/e2e
+      - name: Build Windows x64 package
+        shell: pwsh
+        run: ./scripts/package-release.ps1 -OutputDirectory artifacts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: legacylens-windows-x64-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
