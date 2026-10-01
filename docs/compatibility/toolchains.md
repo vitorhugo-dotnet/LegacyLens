@@ -27,4 +27,14 @@ The repository records the Node.js and npm versions in the root `engines` field.
 
 The Task 6 agent runtime is Java 8, while implementation and required cross-version tests run on the pinned Java 21 toolchain above. Transitive dependency/license inventory is deferred to packaging as specified by the implementation plan.
 
+## Browser extension (Task 7)
+
+| Component | Exact initial version | License and compatibility evidence |
+| --- | --- | --- |
+| WXT | 0.21.4 | MIT; [npm package](https://www.npmjs.com/package/wxt/v/0.21.4) declares Node `>=22`, compatible with the pinned Node 22.15.0. Builds Chrome Manifest V3. |
+| `@types/chrome` | 0.3.4 | MIT; [npm package](https://www.npmjs.com/package/@types/chrome/v/0.3.4). Development types only. |
+| `@types/node` | 22.15.0 | MIT; [npm package](https://www.npmjs.com/package/@types/node/v/22.15.0). Initial Node 22 typings also resolve the carried contracts test import of `node:fs`. |
+
+The extension reuses the repository's exact TypeScript 5.9.3 and Vitest 5.0.3 versions. These are initial workspace dependencies, not upgrades. Runtime target is Chrome/Chromium Manifest V3 on Windows 10 x64. Chrome  extension build and local tests do not establish compatibility with the user's private PrimeFaces/WildFly application; that validation belongs to later tasks.
+
 When the bounded active-trace state table is full, the agent rejects a new trace without assigning the loss to an existing trace. The background transport thread writes a coalesced structured line to the agent process stderr, for example `{"kind":"agent.capacity_rejected","count":3}`. It emits at most one line per second, includes no trace IDs or credentials, and preserves rejections that arrive while the diagnostic sink is writing. Capture remains nonblocking on application threads; check the agent process stderr for this capacity signal.
