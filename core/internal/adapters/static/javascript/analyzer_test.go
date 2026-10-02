@@ -186,7 +186,7 @@ func TestResolveTopLevelAnonymousEventCallback(t *testing.T) {
 	t.Fatalf("top-level handler registration was lost: symbols=%#v relations=%#v", result.Symbols, result.Relations)
 }
 
-func TestResolveTemplateInterpolationDiagnostic(t *testing.T) {
+func TestResolveRequestInsideTemplateInterpolation(t *testing.T) {
 	source := []byte("const first = () => `result ${fetch('/x')}`\n")
 	result, err := NewAnalyzer().Analyze(context.Background(), application.AnalysisInput{
 		ProjectID: "p", RevisionID: "r", Artifacts: []domain.Artifact{{ID: "js", Path: "handlers.js", Language: "javascript"}},
@@ -195,10 +195,103 @@ func TestResolveTemplateInterpolationDiagnostic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, diagnostic := range result.Diagnostics {
-		if diagnostic.Code == "javascript.unsupported_syntax" && diagnostic.Location != nil && diagnostic.Location.Path == "handlers.js" && diagnostic.Location.Line == 1 {
-			return
+	if len(result.Relations) != 1 || result.Relations[0].Kind != "request" || len(result.Evidence) != 1 {
+		t.Fatalf("template expression call was omitted: relations=%#v evidence=%#v diagnostics=%#v", result.Relations, result.Evidence, result.Diagnostics)
+	}
+}
+
+func TestResolveTopLevelRequest(t *testing.T) {
+	source := []byte("fetch('/api')\n")
+	result, err := NewAnalyzer().Analyze(context.Background(), application.AnalysisInput{
+		ProjectID: "p", RevisionID: "r", Artifacts: []domain.Artifact{{ID: "js", Path: "handlers.js", Language: "javascript"}},
+		Sources: map[string][]byte{"handlers.js": source},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Relations) != 1 || result.Relations[0].Kind != "request" {
+		t.Fatalf("top-level request missing: symbols=%#v relations=%#v", result.Symbols, result.Relations)
+	}
+	if len(result.Symbols) != 1 || result.Symbols[0].Kind != "javascript-module" {
+		t.Fatalf("top-level request must belong to module: %#v", result.Symbols)
+	}
+}
+
+func TestResolveFunctionExpressionAndNestedOwnership(t *testing.T) {
+	source := []byte("function outer() { function inner() { save(); } fetch('/outer'); }\nconst load = function() { fetch('/inner'); };\nfunction save() {}")
+	result, err := NewAnalyzer().Analyze(context.Background(), application.AnalysisInput{
+		ProjectID: "p", RevisionID: "r", Artifacts: []domain.Artifact{{ID: "js", Path: "handlers.js", Language: "javascript"}},
+		Sources: map[string][]byte{"handlers.js": source},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[domain.ID]string{}
+	for _, symbol := range result.Symbols {
+		names[symbol.ID] = symbol.QualifiedName
+	}
+	got := map[string][]string{}
+	for _, relation := range result.Relations {
+		got[names[relation.FromID]] = append(got[names[relation.FromID]], relation.Kind+":"+names[deref(relation.ToID)])
+	}
+	if len(got["inner"]) != 1 || !strings.Contains(strings.Join(got["inner"], ","), "calls:save") {
+		t.Fatalf("nested function must own its call once: relations=%#v owners=%#v", result.Relations, got)
+	}
+	if len(got["outer"]) != 1 || got["outer"][0] != "request:" {
+		t.Fatalf("outer function must not inherit nested calls: %#v", got)
+	}
+	if len(got["load"]) != 1 || got["load"][0] != "request:" {
+		t.Fatalf("anonymous function expression request missing: %#v", got)
+	}
+}
+
+func TestResolveSemicolonlessArrowBeforeExpressionStatement(t *testing.T) {
+	source := []byte("const first = () => second()\nfetch('/later')\nfunction second() {}")
+	result, err := NewAnalyzer().Analyze(context.Background(), application.AnalysisInput{
+		ProjectID: "p", RevisionID: "r", Artifacts: []domain.Artifact{{ID: "js", Path: "handlers.js", Language: "javascript"}},
+		Sources: map[string][]byte{"handlers.js": source},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[domain.ID]string{}
+	for _, symbol := range result.Symbols {
+		names[symbol.ID] = symbol.QualifiedName
+	}
+	if len(result.Relations) != 2 {
+		t.Fatalf("ASI expression statement ownership: %#v", result.Relations)
+	}
+	var firstCalls, moduleRequests int
+	for _, relation := range result.Relations {
+		if names[relation.FromID] == "first" && relation.Kind == "calls" {
+			firstCalls++
+		}
+		if names[relation.FromID] == "handlers.js" && relation.Kind == "request" {
+			moduleRequests++
 		}
 	}
-	t.Fatalf("template interpolation was silently omitted: %#v", result.Diagnostics)
+	if firstCalls != 1 || moduleRequests != 1 {
+		t.Fatalf("request after semicolonless arrow assigned incorrectly: symbols=%#v relations=%#v", result.Symbols, result.Relations)
+	}
+}
+
+func TestParseErrorIncludesSourceLocation(t *testing.T) {
+	source := []byte("const valid = 1;\nfunction {\n")
+	result, err := NewAnalyzer().Analyze(context.Background(), application.AnalysisInput{
+		ProjectID: "p", RevisionID: "r", Artifacts: []domain.Artifact{{ID: "js", Path: "handlers.js", Language: "javascript"}},
+		Sources: map[string][]byte{"handlers.js": source},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Code != "javascript.parse_error" || result.Diagnostics[0].Location == nil || result.Diagnostics[0].Location.Path != "handlers.js" || result.Diagnostics[0].Location.Line != 2 {
+		t.Fatalf("parse error must identify source location: %#v", result.Diagnostics)
+	}
+}
+
+func deref(id *domain.ID) domain.ID {
+	if id == nil {
+		return ""
+	}
+	return *id
 }
