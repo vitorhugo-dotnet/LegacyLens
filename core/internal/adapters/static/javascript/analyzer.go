@@ -202,27 +202,71 @@ func functionsIn(tokens []token) []functionNode {
 			}
 			nodes = append(nodes, functionNode{name: tokens[i+1].text, start: tokens[i+1].offset, bodyStart: body + 1, bodyEnd: end})
 		} else if (tokens[i].text == "const" || tokens[i].text == "let" || tokens[i].text == "var") && tokens[i+1].kind == 'i' && tokens[i+2].text == "=" {
-			body := findAfter(tokens, i+3, "{")
-			if body < 0 || body > i+12 {
+			arrow := i + 3
+			if tokens[arrow].text == "async" {
+				arrow++
+			}
+			if arrow >= len(tokens) {
 				continue
 			}
-			arrow := false
-			for j := i + 3; j < body; j++ {
-				if j+1 < body && tokens[j].text == "=" && tokens[j+1].text == ">" {
-					arrow = true
+			if tokens[arrow].text == "(" {
+				end := matching(tokens, arrow, "(", ")")
+				if end < 0 {
+					continue
 				}
-			}
-			if !arrow {
+				arrow = end + 1
+			} else if tokens[arrow].kind == 'i' {
+				arrow++
+			} else {
 				continue
 			}
-			end := matching(tokens, body, "{", "}")
-			if end < 0 {
+			if arrow+2 >= len(tokens) || tokens[arrow].text != "=" || tokens[arrow+1].text != ">" {
 				continue
 			}
-			nodes = append(nodes, functionNode{name: tokens[i+1].text, start: tokens[i+1].offset, bodyStart: body + 1, bodyEnd: end})
+			body := arrow + 2
+			if tokens[body].text == "{" {
+				end := matching(tokens, body, "{", "}")
+				if end < 0 {
+					continue
+				}
+				nodes = append(nodes, functionNode{name: tokens[i+1].text, start: tokens[i+1].offset, bodyStart: body + 1, bodyEnd: end})
+			} else {
+				nodes = append(nodes, functionNode{name: tokens[i+1].text, start: tokens[i+1].offset, bodyStart: body, bodyEnd: expressionEnd(tokens, body)})
+			}
 		}
 	}
 	return nodes
+}
+
+func expressionEnd(tokens []token, start int) int {
+	parens, brackets, braces := 0, 0, 0
+	for i := start; i < len(tokens); i++ {
+		value := tokens[i].text
+		if parens == 0 && brackets == 0 && braces == 0 && (value == ";" || value == "," || value == "}") {
+			return i
+		}
+		switch value {
+		case "(":
+			parens++
+		case ")":
+			if parens > 0 {
+				parens--
+			}
+		case "[":
+			brackets++
+		case "]":
+			if brackets > 0 {
+				brackets--
+			}
+		case "{":
+			braces++
+		case "}":
+			if braces > 0 {
+				braces--
+			}
+		}
+	}
+	return len(tokens)
 }
 func findAfter(tokens []token, start int, value string) int {
 	for i := start; i < len(tokens); i++ {

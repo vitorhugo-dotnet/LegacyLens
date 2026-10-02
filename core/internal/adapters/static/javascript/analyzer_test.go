@@ -58,3 +58,38 @@ const ignored = "button.addEventListener('click', second)";`)
 		t.Fatalf("handler/request edge missing: %#v", result.Relations)
 	}
 }
+
+func TestResolveExpressionBodiedArrow(t *testing.T) {
+	source := []byte(`const first = () => second();
+const second = () => fetch("/orders");
+const wire = () => button.addEventListener("click", first);
+// second();
+const ignored = "fetch('/ignored')";`)
+	result, err := NewAnalyzer().Analyze(context.Background(), application.AnalysisInput{
+		ProjectID: "p", RevisionID: "r", Artifacts: []domain.Artifact{{ID: "js", Path: "handlers.js", Language: "javascript"}},
+		Sources: map[string][]byte{"handlers.js": source},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Symbols) != 3 || len(result.Relations) != 3 {
+		t.Fatalf("expression arrows lost symbols or created false calls: symbols=%#v relations=%#v", result.Symbols, result.Relations)
+	}
+	names := map[domain.ID]string{}
+	for _, symbol := range result.Symbols {
+		names[symbol.ID] = symbol.QualifiedName
+	}
+	kinds := map[string]bool{}
+	for _, relation := range result.Relations {
+		if relation.ToID == nil || len(relation.EvidenceIDs) != 1 || relation.Location == nil {
+			t.Fatalf("arrow edge lacks target/evidence: %#v", relation)
+		}
+		kinds[relation.Kind] = true
+		if names[relation.FromID] == "first" && (names[*relation.ToID] != "second" || relation.Resolution != domain.ResolutionResolved) {
+			t.Fatalf("first must call second: %#v", relation)
+		}
+	}
+	if !kinds["calls"] || !kinds["request"] || !kinds["handler"] {
+		t.Fatalf("arrow call classifications missing: %#v", result.Relations)
+	}
+}
