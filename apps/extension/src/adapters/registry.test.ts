@@ -8,9 +8,14 @@ describe('selectPrimeFacesAdapter', () => {
     expect(selectPrimeFacesAdapter('5.3.14')).toBeInstanceOf(PrimeFacesAdapter);
   });
 
-  it('recognizes the exact legacy Request.handle API when older runtimes omit VERSION', () => {
-    const runtime = { ajax: { Request: { handle() {} } } };
-    expect(selectPrimeFacesAdapter(runtime)).toBeInstanceOf(PrimeFacesAdapter);
+  it('recognizes the complete legacy runtime API when older builds omit VERSION', () => {
+    const page = { PrimeFaces: { ajax: { Request: { handle() {} } } }, jQuery: { ajaxPrefilter() {} } };
+    expect(selectPrimeFacesAdapter(page)).toBeInstanceOf(PrimeFacesAdapter);
+  });
+
+  it('keeps a partial legacy API experimental when its required jQuery hook is missing', () => {
+    const page = { PrimeFaces: { ajax: { Request: { handle() {} } } }, jQuery: {} };
+    expect(selectPrimeFacesAdapter(page)).toBeInstanceOf(PrimeFaces15Adapter);
   });
 
   it('uses the PrimeFaces 15 adapter for version 15', () => {

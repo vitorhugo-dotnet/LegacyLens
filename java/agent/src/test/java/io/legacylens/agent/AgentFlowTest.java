@@ -71,6 +71,31 @@ class AgentFlowTest {
         assertNotNull(http);assertEquals("POST",http.metadata.get("http.method"));
         assertFalse(http.toJson().contains("/private/not-recorded"));
     }
+    @Test void servletAdviceUsesBootstrapBridgeFromIsolatedDeploymentLoader() throws Exception {
+        AgentTransport transport=AgentTransport.forTesting(16);
+        LegacyLensAgent.installForTesting(ByteBuddyAgent.install(),transport,AgentConfig.forTesting("sample.app"));
+        final java.util.Map<String,byte[]> deploymentClasses=new java.util.HashMap<String,byte[]>();
+        deploymentClasses.put("javax.servlet.fake.FakeServlet",classBytes("/javax/servlet/fake/FakeServlet.class"));
+        deploymentClasses.put("javax.servlet.fake.FakeServlet$Request",classBytes("/javax/servlet/fake/FakeServlet$Request.class"));
+        ClassLoader deployment=new ClassLoader(getClass().getClassLoader()) {
+            @Override protected Class<?> loadClass(String name,boolean resolve)throws ClassNotFoundException {
+                if(name.startsWith("io.legacylens.agent."))throw new ClassNotFoundException(name);
+                if(deploymentClasses.containsKey(name))synchronized(getClassLoadingLock(name)) {
+                    Class<?> type=findLoadedClass(name);byte[] bytes=deploymentClasses.get(name);if(type==null)type=defineClass(name,bytes,0,bytes.length);
+                    if(resolve)resolveClass(type);return type;
+                }
+                return super.loadClass(name,resolve);
+            }
+        };
+        Class<?> servletType=deployment.loadClass("javax.servlet.fake.FakeServlet");
+        Object servlet=servletType.getDeclaredConstructor().newInstance();
+        Object request=deployment.loadClass("javax.servlet.fake.FakeServlet$Request").getDeclaredConstructor().newInstance();
+        servletType.getMethod("service",Object.class,Object.class).invoke(servlet,request,new Object());
+        java.util.List<String> kinds=new java.util.ArrayList<String>();
+        for(Event event;(event=transport.pollForTesting())!=null;)kinds.add(event.kind);
+        assertTrue(kinds.contains("http.server"),kinds.toString());
+        assertTrue(kinds.contains("endpoint.start"),kinds.toString());
+    }
     @Test void equalNamesInDifferentLoadersRetainDeploymentIdentity() throws Exception {
         Class<?> first=isolatedSampleClass(); Class<?> second=isolatedSampleClass();
         assertNotSame(first,second); assertEquals(first.getName(),second.getName());
