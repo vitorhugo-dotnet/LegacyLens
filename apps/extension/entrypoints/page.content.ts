@@ -1,5 +1,5 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
-import { PrimeFacesAdapter } from '../src/adapters/primefaces5.ts';
+import { selectPrimeFacesAdapter, type PagePrimeFacesAdapter } from '../src/adapters/registry.ts';
 import { armInteraction, installAsyncContextCapture, withInteraction, withoutInteraction } from '../src/capture/async-context.ts';
 import { installNetworkCapture } from '../src/capture/network.ts';
 
@@ -8,9 +8,9 @@ export default defineContentScript({
   world: 'MAIN',
   runAt: 'document_start',
   main() {
-    const adapter = new PrimeFacesAdapter();
     // Install before page scripts register listeners; selection arms one matching click later.
     installAsyncContextCapture();
+    let adapter: PagePrimeFacesAdapter | undefined;
     let uninstall: (() => void) | undefined;
     let nonce = '';
     let traceId = '';
@@ -18,6 +18,8 @@ export default defineContentScript({
       const detail = (event as CustomEvent).detail as { nonce?: string; traceId?: string; origin?: string };
       if (!detail || typeof detail.nonce !== 'string' || !/^[a-f0-9]{32}$/i.test(detail.traceId ?? '') || detail.origin !== location.origin) return;
       uninstall?.(); nonce = detail.nonce; traceId = detail.traceId!;
+      const page = globalThis as typeof globalThis & { PrimeFaces?: { VERSION?: unknown } };
+      adapter = selectPrimeFacesAdapter(page.PrimeFaces?.VERSION);
       const nextSpanId = () => {
         let id: string;
         do { id = [...crypto.getRandomValues(new Uint8Array(8))].map((n) => n.toString(16).padStart(2, '0')).join(''); }
@@ -38,12 +40,12 @@ export default defineContentScript({
     window.addEventListener('legacylens:select', (event) => {
       const detail = (event as CustomEvent).detail as { nonce?: string; source?: string };
       if (detail?.nonce === nonce && typeof detail.source === 'string') {
-        adapter.select(detail.source);
+        adapter?.select(detail.source);
         armInteraction({ source: detail.source, origin: location.origin, traceId });
       }
     });
     window.addEventListener('legacylens:stop', (event) => {
-      if ((event as CustomEvent).detail?.nonce === nonce) { uninstall?.(); uninstall = undefined; nonce = ''; traceId = ''; }
+      if ((event as CustomEvent).detail?.nonce === nonce) { uninstall?.(); uninstall = undefined; adapter = undefined; nonce = ''; traceId = ''; }
     });
   },
 });

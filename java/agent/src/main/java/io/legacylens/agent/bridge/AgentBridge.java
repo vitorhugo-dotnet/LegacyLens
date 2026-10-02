@@ -13,6 +13,10 @@ public final class AgentBridge {
     private static volatile Method jdbcExit;
     private static volatile Method prepareStatement;
     private static volatile Method preparedExecute;
+    private static volatile Method endpointEnter;
+    private static volatile Method endpointExit;
+    private static volatile Method facesActionEnter;
+    private static volatile Method facesActionExit;
 
     private AgentBridge() { }
 
@@ -25,6 +29,10 @@ public final class AgentBridge {
         jdbcExit = agent.getMethod("jdbcExit", String.class, String.class, boolean.class);
         prepareStatement = agent.getMethod("preparedStatement", Object.class, String.class);
         preparedExecute = agent.getMethod("preparedExecute", Object.class, String.class);
+        endpointEnter = agent.getMethod("endpointEnter", Class.class);
+        endpointExit = agent.getMethod("endpointExit", Throwable.class);
+        facesActionEnter = agent.getMethod("facesActionEnter", Class.class, String.class);
+        facesActionExit = agent.getMethod("facesActionExit", Class.class, String.class, Throwable.class);
     }
 
     public static boolean servletEnter(Object request) { return booleanResult(call(servletEnter, request)); }
@@ -35,6 +43,10 @@ public final class AgentBridge {
     public static void jdbcExit(String operation, String sql, boolean outer) { call(jdbcExit, operation, sql, outer); }
     public static void preparedStatement(Object statement, String sql) { call(prepareStatement, statement, sql); }
     public static boolean preparedExecute(Object statement, String method) { return booleanResult(call(preparedExecute, statement, method)); }
+    public static boolean endpointEnter(Class<?> endpoint) { return booleanResult(call(endpointEnter, endpoint)); }
+    public static void endpointExit(Throwable thrown) { call(endpointExit, thrown); }
+    public static boolean facesActionEnter(Class<?> listener, String method) { return booleanResult(call(facesActionEnter, listener, method)); }
+    public static void facesActionExit(Class<?> listener, String method, Throwable thrown) { call(facesActionExit, listener, method, thrown); }
 
     private static Object call(Method method, Object... arguments) {
         if (method == null) return null;

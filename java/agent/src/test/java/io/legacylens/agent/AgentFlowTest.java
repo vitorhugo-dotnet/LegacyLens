@@ -121,10 +121,10 @@ class AgentFlowTest {
         Event restoredOuter=events.stream().filter(e->e.traceId.equals(outerDifferent.traceId)&&e.kind.equals("method.start")&&"load".equals(e.metadata.get("code.method"))).findFirst().get();
         assertEquals(outerDifferent.eventId,restoredOuter.parentEventId,"after the inner trace exits, the outer context remains current");
         java.util.List<Event> outerEvents=events.stream().filter(e->e.traceId.equals(outerDifferent.traceId)).collect(java.util.stream.Collectors.toList());
-        assertEquals(outerDifferent.producerId,restoredOuter.producerId);assertEquals(2,restoredOuter.sequence,"nested other-trace events must not advance the outer trace sequence");
+        assertEquals(outerDifferent.producerId,restoredOuter.producerId);assertEquals(3,restoredOuter.sequence,"endpoint identity adds one event without advancing this trace during nested requests");
         for(int i=0;i<outerEvents.size();i++){assertEquals(i+1,outerEvents.get(i).sequence);assertEquals(outerDifferent.producerId,outerEvents.get(i).producerId);}
         Event outerSame=http(events,"33333333333333333333333333333333",1);
-        Event innerSame=http(events,"33333333333333333333333333333333",2);
+        Event innerSame=http(events,"33333333333333333333333333333333",3);
         assertEquals(outerSame.eventId,innerSame.parentEventId,"same-trace nested HTTP requests retain the causal edge");
         java.util.List<Event> sameTrace=events.stream().filter(e->e.traceId.equals(outerSame.traceId)).collect(java.util.stream.Collectors.toList());
         for(int i=0;i<sameTrace.size();i++)assertEquals(i+1,sameTrace.get(i).sequence);

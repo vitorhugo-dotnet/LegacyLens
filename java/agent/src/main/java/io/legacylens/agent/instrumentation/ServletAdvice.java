@@ -1,13 +1,13 @@
 package io.legacylens.agent.instrumentation;
 import net.bytebuddy.asm.Advice;
 public final class ServletAdvice {
- @Advice.OnMethodEnter public static boolean enter(@Advice.Argument(0) Object request){
-  try { Class<?> bridge=Class.forName("io.legacylens.agent.bridge.AgentBridge",true,null);return Boolean.TRUE.equals(bridge.getMethod("servletEnter",Object.class).invoke(null,request)); }
+ @Advice.OnMethodEnter(suppress=Throwable.class) public static boolean enter(@Advice.Argument(0) Object request,@Advice.Origin Class<?> endpoint){
+  try { return EndpointAdvice.begin(request,endpoint); }
   catch(Throwable ignored){return false;}
  }
- @Advice.OnMethodExit(onThrowable=Throwable.class) public static void exit(@Advice.Enter boolean active){
+ @Advice.OnMethodExit(onThrowable=Throwable.class,suppress=Throwable.class) public static void exit(@Advice.Enter boolean active,@Advice.Thrown Throwable thrown){
   if(!active)return;
-  try { Class<?> bridge=Class.forName("io.legacylens.agent.bridge.AgentBridge",true,null);bridge.getMethod("servletExit",boolean.class).invoke(null,active); }
+  try { EndpointAdvice.finish(active,thrown); }
   catch(Throwable ignored){}
  }
 }

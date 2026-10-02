@@ -2,6 +2,7 @@ package io.legacylens.agent;
 
 import io.legacylens.agent.instrumentation.JdbcAdvice;
 import io.legacylens.agent.instrumentation.MethodAdvice;
+import io.legacylens.agent.instrumentation.FacesAdvice;
 import io.legacylens.agent.instrumentation.PrepareStatementAdvice;
 import io.legacylens.agent.instrumentation.PreparedStatementAdvice;
 import io.legacylens.agent.instrumentation.ServletAdvice;
@@ -73,8 +74,8 @@ public final class LegacyLensAgent {
               .visit(Advice.to(PrepareStatementAdvice.class).on(namedOneOf("prepareStatement", "prepareCall").and(takesArguments(1)))))
           .type(new net.bytebuddy.matcher.ElementMatcher<net.bytebuddy.description.type.TypeDescription>() {
               public boolean matches(net.bytebuddy.description.type.TypeDescription type) {
-                  String name = type.getName();
-                  return instrumentableApplicationType(name, agentConfig.packages);
+                  return instrumentableApplicationType(type.getName(), agentConfig.packages)
+                      && !hasSuperType(named("javax.servlet.Servlet").or(named("jakarta.servlet.Servlet"))).matches(type);
               }
           })
           .transform((builder, type, loader, module, protectionDomain) -> builder.visit(Advice.to(MethodAdvice.class).on(isMethod().and(not(isAbstract())).and(not(isNative())))))
@@ -140,6 +141,48 @@ public final class LegacyLensAgent {
             AgentTransport currentTransport = transport;
             if (ended != null && ended.state != null && currentTransport != null) currentTransport.releaseTrace(ended.state);
         }
+    }
+
+    public static boolean endpointEnter(Class<?> endpoint) {
+        TraceContext trace = TraceContext.current();
+        if (trace == null) return false;
+        Map<String, String> metadata = applicationMetadata(endpoint);
+        metadata.put("endpoint.class", endpoint.getName());
+        Event event = emit("endpoint.start", metadata);
+        return event != null;
+    }
+
+    public static void endpointExit(Throwable thrown) {
+        emit(thrown == null ? "endpoint.end" : "endpoint.error", new LinkedHashMap<String, String>());
+    }
+
+    public static boolean facesActionEnter(Class<?> listener, String method) {
+        if (!FacesAdvice.isActionCallback(listener, method)) return false;
+        TraceContext trace = TraceContext.current();
+        if (trace == null) return false;
+        Map<String, String> metadata = applicationMetadata(listener);
+        metadata.put("faces.listener", listener.getName());
+        metadata.put("faces.method", method);
+        Event event = emit("faces.action.start", metadata);
+        if (event != null) TraceContext.pushEvent(event.eventId);
+        return event != null;
+    }
+
+    public static void facesActionExit(Class<?> listener, String method, Throwable thrown) {
+        if (!FacesAdvice.isActionCallback(listener, method)) return;
+        TraceContext trace = TraceContext.current();
+        Map<String, String> metadata = applicationMetadata(listener);
+        metadata.put("faces.listener", listener.getName()); metadata.put("faces.method", method);
+        try { emit(thrown == null ? "faces.action.end" : "faces.action.error", metadata); }
+        finally { if (trace != null) TraceContext.popEvent(); }
+    }
+
+    private static Map<String, String> applicationMetadata(Class<?> applicationType) {
+        Map<String, String> metadata = new LinkedHashMap<String, String>();
+        ApplicationRevision revision = ApplicationIdentity.describe(applicationType);
+        metadata.put("application.revision.status", revision.status());
+        if (revision.value() != null) metadata.put("application.revision", revision.value());
+        return metadata;
     }
 
     public static boolean methodEnter(String type, String name, String descriptor, Class<?> owner) {
