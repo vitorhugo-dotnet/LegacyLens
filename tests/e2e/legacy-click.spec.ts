@@ -121,6 +121,7 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
         losses:events.filter((event)=>event.kind==='agent.loss').map((event)=>event.metadata?.['agent.dropped_count']),
       };
     },{timeout:30_000}).toMatchObject({insert:true,update:true});
+    const investigationPage = context.waitForEvent('page',{timeout:15_000});
     await page.getByRole('button',{name:'Stop capture'}).click();
     await expect.poll(activeTrace,{timeout:15_000,message:'second capture did not stop'}).toBeUndefined();
     const result = await investigation(trace);
@@ -160,10 +161,12 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
     expect(events.some((event)=>event.kind==='db.update'&&event.metadata?.sql==='INSERT INTO orders (note) VALUES (?)')).toBe(true);
     expect(JSON.stringify(result)).not.toContain('fixture-private-order-value');
     expect(JSON.stringify(result)).not.toContain('traceparent');
-    const panels=context.pages().filter((item)=>item.url().includes('investigation.html'));
-    expect(panels.length).toBeGreaterThan(0);
-    const panel=panels[panels.length-1]!;
-    await expect(panel.getByRole('button',{name:'Relação observada: http.request'}).first()).toBeVisible();
+    const panel = await investigationPage;
+    await expect.poll(() => {
+      try { return new URL(panel.url()).searchParams.get('traceId'); }
+      catch { return null; }
+    },{timeout:15_000,message:'the opened investigation must belong to the selected capture'}).toBe(trace);
+    await expect(panel.getByRole('button',{name:'Relação observada: http.request'}).first()).toBeVisible({timeout:15_000});
     await panel.getByRole('button',{name:'Relação observada: http.request'}).first().click();
     await expect(panel.getByRole('complementary',{name:'Evidência'})).toContainText('Camada: observed; resolução: resolved');
   } finally {
