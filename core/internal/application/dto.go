@@ -162,11 +162,46 @@ type GraphQuery struct {
 	RevisionID domain.ID   `json:"revisionId,omitempty"`
 	SymbolIDs  []domain.ID `json:"symbolIds"`
 	Depth      int         `json:"depth"`
+	Offset     int         `json:"offset,omitempty"`
+	Limit      int         `json:"limit,omitempty"`
 }
 
 type GraphResult struct {
-	Symbols   []domain.Symbol   `json:"symbols"`
-	Relations []domain.Relation `json:"relations"`
+	ProjectID   domain.ID         `json:"projectId,omitempty"`
+	RevisionID  domain.ID         `json:"revisionId,omitempty"`
+	Symbols     []domain.Symbol   `json:"symbols"`
+	Relations   []domain.Relation `json:"relations"`
+	Paths       []GraphPath       `json:"paths,omitempty"`
+	Evidence    []domain.Evidence `json:"evidence,omitempty"`
+	Diagnostics []GraphDiagnostic `json:"diagnostics,omitempty"`
+	Depth       int               `json:"depth,omitempty"`
+	Offset      int               `json:"offset,omitempty"`
+	Limit       int               `json:"limit,omitempty"`
+	Total       int               `json:"total,omitempty"`
+	HasMore     bool              `json:"hasMore,omitempty"`
+	Truncated   bool              `json:"truncated,omitempty"`
+}
+
+// GraphPath gives the UI an explicit source-to-target chain and its evidence.
+// SymbolIDs and RelationIDs are ordered from the affected source toward target.
+type GraphPath struct {
+	SourceID    domain.ID   `json:"sourceId"`
+	TargetID    domain.ID   `json:"targetId"`
+	SymbolIDs   []domain.ID `json:"symbolIds"`
+	RelationIDs []domain.ID `json:"relationIds"`
+	EvidenceIDs []domain.ID `json:"evidenceIds"`
+	Inferred    bool        `json:"inferred,omitempty"`
+}
+
+// GraphDiagnostic ties incomplete or inferred graph results back to indexed source.
+type GraphDiagnostic struct {
+	ID          domain.ID        `json:"id"`
+	Code        string           `json:"code"`
+	Message     string           `json:"message"`
+	SymbolIDs   []domain.ID      `json:"symbolIds,omitempty"`
+	RelationID  domain.ID        `json:"relationId,omitempty"`
+	EvidenceIDs []domain.ID      `json:"evidenceIds,omitempty"`
+	Location    *domain.Location `json:"location,omitempty"`
 }
 
 type GraphResultPage struct {

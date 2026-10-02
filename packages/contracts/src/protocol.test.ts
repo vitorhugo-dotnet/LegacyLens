@@ -82,4 +82,20 @@ describe('parseEnvelope', () => {
     expect(parseEnvelope({ protocolVersion: 1, requestId: 'r1', command: 'investigation.get', payload: { projectId: 'p1', traceId: '0123456789abcdef0123456789abcdef', offset: 20, limit: 20 } }).command)
       .toBe('investigation.get');
   });
+
+  it('requires bounded depth and explicit pagination on impact queries', () => {
+    const payload = { projectId: 'p1', symbolId: 'orders-table', depth: 8, offset: 0, limit: 50 };
+    expect(parseEnvelope({ protocolVersion: 1, requestId: 'r1', command: 'impact.query', payload }).command)
+      .toBe('impact.query');
+    for (const invalid of [
+      { ...payload, depth: undefined },
+      { ...payload, depth: 17 },
+      { ...payload, offset: undefined },
+      { ...payload, limit: undefined },
+      { ...payload, limit: 201 },
+    ]) {
+      expect(() => parseEnvelope({ protocolVersion: 1, requestId: 'r1', command: 'impact.query', payload: invalid }))
+        .toThrowError(expect.objectContaining({ code: 'INVALID_PAYLOAD' }));
+    }
+  });
 });

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jasperReport name="summary" xmlns="http://jasperreports.sourceforge.net/jasperreports">
+  <subreport><subreportExpression><![CDATA[$P{REPORT_DIR} + "/detail.jasper"]]></subreportExpression></subreport>
+</jasperReport>

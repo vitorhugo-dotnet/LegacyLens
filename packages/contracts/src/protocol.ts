@@ -148,6 +148,57 @@ export interface GraphResult {
   relations: Page<Relation>;
 }
 
+export interface ImpactQueryPayload {
+  projectId: ID;
+  revisionId?: ID;
+  symbolId: ID;
+  depth: number;
+  offset: number;
+  limit: number;
+}
+
+export interface ImpactQueryCommand {
+  protocolVersion: 1;
+  requestId: string;
+  command: 'impact.query';
+  payload: ImpactQueryPayload;
+}
+
+export interface ImpactPath {
+  sourceId: ID;
+  targetId: ID;
+  symbolIds: ID[];
+  relationIds: ID[];
+  evidenceIds: ID[];
+  inferred?: boolean;
+}
+
+export interface GraphDiagnostic {
+  id: ID;
+  code: string;
+  message: string;
+  symbolIds?: ID[];
+  relationId?: ID;
+  evidenceIds?: ID[];
+  location?: Location;
+}
+
+export interface ImpactResult {
+  projectId: ID;
+  revisionId: ID;
+  symbols: Symbol[];
+  relations: Relation[];
+  paths: ImpactPath[];
+  evidence: Evidence[];
+  diagnostics: GraphDiagnostic[];
+  depth: number;
+  offset: number;
+  limit: number;
+  total: number;
+  hasMore: boolean;
+  truncated: boolean;
+}
+
 export interface CaptureSession {
   id: ID;
   projectId: ID;
@@ -302,7 +353,7 @@ function validatePayload(command: (typeof commands)[number], payload: Record<str
         : command === 'project.index' ? ['projectId', 'paths', 'offset', 'limit']
           : command === 'symbol.search' ? ['projectId', 'revisionId', 'text', 'kinds', 'limit', 'offset']
             : command === 'graph.explore' ? ['projectId', 'revisionId', 'symbolIds', 'depth', 'offset', 'limit']
-              : command === 'impact.query' ? ['projectId', 'revisionId', 'symbolId']
+              : command === 'impact.query' ? ['projectId', 'revisionId', 'symbolId', 'depth', 'offset', 'limit']
                 : command === 'capture.start' ? ['projectId', 'tabId']
                   : command === 'capture.stop' ? ['projectId', 'traceId']
                     : command === 'trace.ingest' ? ['projectId', 'events']
@@ -342,6 +393,9 @@ function validatePayload(command: (typeof commands)[number], payload: Record<str
       if (command === 'impact.query') {
         requireString('symbolId');
         optionalString('revisionId');
+        if (typeof payload.depth !== 'number' || !Number.isInteger(payload.depth) || payload.depth < 0 || payload.depth > 16) invalidPayload('depth must be an integer from 0 to 16');
+        if (typeof payload.offset !== 'number' || !Number.isInteger(payload.offset) || payload.offset < 0 || payload.offset > 1_000_000_000) invalidPayload('offset must be an integer from 0 to 1000000000');
+        if (typeof payload.limit !== 'number' || !Number.isInteger(payload.limit) || payload.limit < 0 || payload.limit > 200) invalidPayload('limit must be an integer from 0 to 200');
         break;
       }
       if (command === 'capture.start') {

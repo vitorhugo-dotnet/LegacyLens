@@ -117,11 +117,33 @@ func TestAPIReportsFutureCommandAsUnsupported(t *testing.T) {
 	}
 }
 
-func TestAPIReportsUnimplementedImpactAsUnsupported(t *testing.T) {
-	request := `{"protocolVersion":1,"requestId":"r1","command":"impact.query","payload":{"projectId":"p1","symbolId":"s1"}}`
-	response := apiRequest(testServer(), "/v1/commands", "host-secret-token", "", request)
-	if response.Code != http.StatusNotImplemented || !strings.Contains(response.Body.String(), `"code":"UNSUPPORTED_COMMAND"`) {
-		t.Fatalf("unimplemented impact command = %d %s", response.Code, response.Body)
+func TestAPIImpactQueryReturnsSourceBackedPathsAndPagination(t *testing.T) {
+	to := domain.ID("table")
+	store := &searchIndexStoreStub{snapshot: application.InvestigationIndex{
+		RevisionID: "rev1",
+		Symbols:    []domain.Symbol{{ID: "table", ProjectID: "p1", RevisionID: "rev1", QualifiedName: "orders", Kind: "table"}, {ID: "method", ProjectID: "p1", RevisionID: "rev1", QualifiedName: "OrdersDao.load", Kind: "method"}},
+		Relations:  []domain.Relation{{ID: "sql", FromID: "method", ToID: &to, Kind: "sql-table", EvidenceIDs: []domain.ID{"source"}, Layer: domain.LayerStatic, Resolution: domain.ResolutionResolved}},
+		Evidence:   []domain.Evidence{{ID: "source", Kind: "source", Source: "src/OrdersDao.java"}},
+	}}
+	service := application.NewImpactService(store)
+	handler := NewServer(Services{Impact: service}, AuthConfig{HostToken: "host-secret-token", AgentToken: "agent-secret-token"})
+	request := `{"protocolVersion":1,"requestId":"r1","command":"impact.query","payload":{"projectId":"p1","symbolId":"table","depth":4,"offset":0,"limit":1}}`
+	response := apiRequest(handler, "/v1/commands", "host-secret-token", "", request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("impact.query = %d %s", response.Code, response.Body)
+	}
+	var wire struct {
+		Result application.GraphResult `json:"result"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.Result.Depth != 4 || wire.Result.Offset != 0 || wire.Result.Limit != 1 || wire.Result.Total != 1 || len(wire.Result.Paths) != 1 || wire.Result.Paths[0].SourceID != "method" || len(wire.Result.Evidence) != 1 {
+		t.Fatalf("impact response omitted path evidence or pagination metadata: %+v", wire.Result)
+	}
+	invalid := strings.Replace(request, `"depth":4`, `"depth":17`, 1)
+	if got := apiRequest(handler, "/v1/commands", "host-secret-token", "", invalid); got.Code != http.StatusBadRequest || !strings.Contains(got.Body.String(), `"code":"INVALID_PAYLOAD"`) {
+		t.Fatalf("impact depth above 16 = %d %s", got.Code, got.Body)
 	}
 }
 
@@ -222,7 +244,10 @@ func TestAPIInvestigationReturnsLaterPagesForEachCollection(t *testing.T) {
 	}
 }
 
-type searchIndexStoreStub struct{ query application.SearchQuery }
+type searchIndexStoreStub struct {
+	query    application.SearchQuery
+	snapshot application.InvestigationIndex
+}
 
 func (searchIndexStoreStub) CommitIndex(context.Context, application.IndexResult) error { return nil }
 func (s *searchIndexStoreStub) Search(_ context.Context, query application.SearchQuery) (application.SearchResult, error) {
@@ -232,12 +257,15 @@ func (s *searchIndexStoreStub) Search(_ context.Context, query application.Searc
 func (searchIndexStoreStub) Explore(context.Context, application.GraphQuery) (application.GraphResult, error) {
 	return application.GraphResult{}, nil
 }
+func (s *searchIndexStoreStub) LoadInvestigationIndex(context.Context, domain.ID) (application.InvestigationIndex, error) {
+	return s.snapshot, nil
+}
 
 func TestAPISymbolSearchReturnsRequestedLaterPage(t *testing.T) {
 	projects := projectCatalogStub{projects: []domain.Project{{ID: "p1"}}}
-	store := &searchIndexStoreStub{}
-	indexer := application.NewIndexer(store, projects, nil, nil)
-	handler := NewServer(Services{Indexer: indexer}, AuthConfig{HostToken: "host", AgentToken: "agent"})
+	store := &searchIndexStoreStub{snapshot: application.InvestigationIndex{RevisionID: "rev-current"}}
+	search := application.NewSearchService(store, projects)
+	handler := NewServer(Services{Search: search}, AuthConfig{HostToken: "host", AgentToken: "agent"})
 	response := apiRequest(handler, "/v1/commands", "host", "", `{"protocolVersion":1,"requestId":"r1","command":"symbol.search","payload":{"projectId":"p1","text":"save","offset":1,"limit":1}}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("symbol.search = %d %s", response.Code, response.Body)
@@ -248,7 +276,7 @@ func TestAPISymbolSearchReturnsRequestedLaterPage(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &wire); err != nil {
 		t.Fatal(err)
 	}
-	if store.query.Offset != 1 || wire.Result.Offset != 1 || wire.Result.Limit != 1 || wire.Result.Total != 3 || !wire.Result.HasMore || len(wire.Result.Symbols) != 1 || wire.Result.Symbols[0].ID != "s2" {
+	if store.query.RevisionID != "rev-current" || store.query.Offset != 1 || wire.Result.Offset != 1 || wire.Result.Limit != 1 || wire.Result.Total != 3 || !wire.Result.HasMore || len(wire.Result.Symbols) != 1 || wire.Result.Symbols[0].ID != "s2" {
 		t.Fatalf("search later page query=%+v result=%+v", store.query, wire.Result)
 	}
 }

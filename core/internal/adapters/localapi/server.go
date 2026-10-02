@@ -27,6 +27,8 @@ const (
 type Services struct {
 	Projects       *application.ProjectService
 	Indexer        *application.Indexer
+	Search         *application.SearchService
+	Impact         *application.ImpactService
 	Captures       *application.CaptureService
 	Presence       *application.AgentPresence
 	Investigations *application.InvestigationService
@@ -135,14 +137,26 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if request.Command == "agent.heartbeat" {
-		if r.URL.Path != "/v1/events" || s.services.Presence == nil { writeError(w,http.StatusBadRequest,"INVALID_PAYLOAD","Agent heartbeat is unavailable.",request.RequestID); return }
-		var payload struct { ProjectID domain.ID `json:"projectId"`; ProducerID domain.ID `json:"producerId"` }
-		decoder := json.NewDecoder(bytes.NewReader(request.Payload)); decoder.DisallowUnknownFields()
-		if decoder.Decode(&payload) != nil || decoder.Decode(new(any)) != io.EOF || !safePresenceID.MatchString(string(payload.ProjectID)) || !safePresenceID.MatchString(string(payload.ProducerID)) {
-			writeError(w,http.StatusBadRequest,"INVALID_PAYLOAD","Agent heartbeat identity is invalid.",request.RequestID); return
+		if r.URL.Path != "/v1/events" || s.services.Presence == nil {
+			writeError(w, http.StatusBadRequest, "INVALID_PAYLOAD", "Agent heartbeat is unavailable.", request.RequestID)
+			return
 		}
-		if err := s.services.Presence.Heartbeat(payload.ProjectID,payload.ProducerID); err != nil { writeError(w,http.StatusServiceUnavailable,"AGENT_PRESENCE_LIMIT","Agent presence is unavailable.",request.RequestID); return }
-		writeResponse(w,http.StatusOK,response{ProtocolVersion:protocolVersion,RequestID:request.RequestID,Result:map[string]bool{"accepted":true}}); return
+		var payload struct {
+			ProjectID  domain.ID `json:"projectId"`
+			ProducerID domain.ID `json:"producerId"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(request.Payload))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&payload) != nil || decoder.Decode(new(any)) != io.EOF || !safePresenceID.MatchString(string(payload.ProjectID)) || !safePresenceID.MatchString(string(payload.ProducerID)) {
+			writeError(w, http.StatusBadRequest, "INVALID_PAYLOAD", "Agent heartbeat identity is invalid.", request.RequestID)
+			return
+		}
+		if err := s.services.Presence.Heartbeat(payload.ProjectID, payload.ProducerID); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "AGENT_PRESENCE_LIMIT", "Agent presence is unavailable.", request.RequestID)
+			return
+		}
+		writeResponse(w, http.StatusOK, response{ProtocolVersion: protocolVersion, RequestID: request.RequestID, Result: map[string]bool{"accepted": true}})
+		return
 	}
 	result, failure := s.execute(r.Context(), request)
 	if failure != nil {
@@ -285,14 +299,45 @@ func (s *server) execute(ctx context.Context, request envelope) (any, *apiError)
 			Limit      int       `json:"limit"`
 			Offset     int       `json:"offset"`
 		}
-		if err := decode(&payload); err != nil || payload.ProjectID == "" || payload.Text == "" || s.services.Indexer == nil {
+		if err := decode(&payload); err != nil || payload.ProjectID == "" || payload.Text == "" || s.services.Search == nil && s.services.Indexer == nil {
 			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Symbol search requires a project id and text."}
 		}
 		offset, limit, pageErr := pageParams(payload.Offset, payload.Limit)
 		if pageErr != nil {
 			return nil, pageErr
 		}
-		result, err := s.services.Indexer.Search(ctx, application.SearchQuery{ProjectID: payload.ProjectID, RevisionID: payload.RevisionID, Text: payload.Text, Kinds: payload.Kinds, Limit: limit, Offset: offset})
+		query := application.SearchQuery{ProjectID: payload.ProjectID, RevisionID: payload.RevisionID, Text: payload.Text, Kinds: payload.Kinds, Limit: limit, Offset: offset}
+		var result application.SearchResult
+		var err error
+		if s.services.Search != nil {
+			result, err = s.services.Search.Search(ctx, query)
+		} else {
+			result, err = s.services.Indexer.Search(ctx, query)
+		}
+		if err != nil {
+			return failed()
+		}
+		return result, nil
+	case "impact.query":
+		var payload struct {
+			ProjectID  domain.ID `json:"projectId"`
+			RevisionID domain.ID `json:"revisionId"`
+			SymbolID   domain.ID `json:"symbolId"`
+			Depth      *int      `json:"depth"`
+			Offset     *int      `json:"offset"`
+			Limit      *int      `json:"limit"`
+		}
+		if err := decode(&payload); err != nil || payload.ProjectID == "" || payload.SymbolID == "" || payload.Depth == nil || payload.Offset == nil || payload.Limit == nil || s.services.Impact == nil {
+			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Impact query requires a project, symbol, depth, offset, and limit."}
+		}
+		if *payload.Depth < 0 || *payload.Depth > 16 {
+			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Impact depth must be between 0 and 16."}
+		}
+		offset, limit, pageErr := pageParams(*payload.Offset, *payload.Limit)
+		if pageErr != nil {
+			return nil, pageErr
+		}
+		result, err := s.services.Impact.Query(ctx, application.GraphQuery{ProjectID: payload.ProjectID, RevisionID: payload.RevisionID, SymbolIDs: []domain.ID{payload.SymbolID}, Depth: *payload.Depth, Offset: offset, Limit: limit})
 		if err != nil {
 			return failed()
 		}

@@ -1,1 +1,20 @@
-:root{font-family:system-ui,sans-serif;color:#17212d;background:#f5f7fb}body{margin:0}.project-tools,.investigation-page{padding:1.25rem;max-width:1440px;margin:auto}.project-tools{background:#e7eef9;border-bottom:1px solid #a8bad4}.project-tools label{margin-right:1rem}.project-tools input,.project-tools select{margin:.4rem;padding:.4rem}button{cursor:pointer;padding:.45rem .65rem;border:1px solid #647fa4;border-radius:5px;background:white;color:#123351}button:hover{background:#dce9fb}button:disabled{opacity:.5;cursor:default}.investigation-layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(290px,1fr);gap:1rem;margin-top:1rem}.graph-view,.evidence-panel{background:white;border:1px solid #c8d4e2;border-radius:8px;padding:1rem;min-width:0}.graph-view ul,.evidence-panel ul{padding-left:1.25rem}.graph-view li{margin:.35rem 0}.producer-branch{border-left:3px solid #2d70bc;padding-left:1rem;margin:1rem 0}small{color:#4b5b70}strong[role=status]{display:inline-block;background:#fff2cf;padding:.4rem .6rem;border-radius:4px}[role=alert]{color:#a51d1d}@media(max-width:800px){.investigation-layout{grid-template-columns:1fr}}
+:root{font-family:system-ui,sans-serif;color:#17212d;background:#f5f7fb}
+body{margin:0}
+.project-tools,.investigation-page,.analysis-page{padding:1.25rem;max-width:1440px;margin:auto}
+.project-tools{background:#e7eef9;border-bottom:1px solid #a8bad4}
+.project-tools label,.analysis-page label{margin-right:1rem}
+.project-tools input,.project-tools select,.analysis-page input,.analysis-page select{margin:.4rem;padding:.4rem}
+button{cursor:pointer;padding:.45rem .65rem;border:1px solid #647fa4;border-radius:5px;background:white;color:#123351}
+button:hover{background:#dce9fb}
+button:disabled{opacity:.5;cursor:default}
+.page-controls{display:flex;align-items:center;gap:.75rem;margin:1rem 0}
+.analysis-page li{margin:.5rem 0}
+.investigation-layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(290px,1fr);gap:1rem;margin-top:1rem}
+.graph-view,.evidence-panel{background:white;border:1px solid #c8d4e2;border-radius:8px;padding:1rem;min-width:0}
+.graph-view ul,.evidence-panel ul{padding-left:1.25rem}
+.graph-view li{margin:.35rem 0}
+.producer-branch{border-left:3px solid #2d70bc;padding-left:1rem;margin:1rem 0}
+small{color:#4b5b70}
+strong[role=status]{display:inline-block;background:#fff2cf;padding:.4rem .6rem;border-radius:4px}
+[role=alert]{color:#a51d1d}
+@media(max-width:800px){.investigation-layout{grid-template-columns:1fr}}

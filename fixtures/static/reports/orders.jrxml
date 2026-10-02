@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jasperReport name="orders" xmlns="http://jasperreports.sourceforge.net/jasperreports">
+  <queryString language="SQL"><![CDATA[select o.id, c.name from orders o join customers c on c.id = o.customer_id]]></queryString>
+  <field name="orderId" class="java.lang.Long"><fieldDescription>o.id</fieldDescription></field>
+  <field name="customerName" class="java.lang.String"><fieldDescription>c.name</fieldDescription></field>
+  <textField><textFieldExpression><![CDATA[$F{customerName} + " / " + $P{status}]]></textFieldExpression></textField>
+  <subreport><subreportExpression><![CDATA["reports/order-lines.jasper"]]></subreportExpression></subreport>
+</jasperReport>
