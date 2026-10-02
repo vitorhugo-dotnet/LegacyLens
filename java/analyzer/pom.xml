@@ -8,7 +8,7 @@
     <dependency><groupId>com.github.javaparser</groupId><artifactId>javaparser-symbol-solver-core</artifactId><version>3.28.2</version></dependency>
     <!-- JSqlParser 4.9 is used under its Apache-2.0 option; 5.x requires Java 11. -->
     <dependency><groupId>com.github.jsqlparser</groupId><artifactId>jsqlparser</artifactId><version>4.9</version></dependency>
-    <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId><version>2.17.2</version></dependency>
+    <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId><version>2.18.11</version></dependency>
     <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>${junit.version}</version><scope>test</scope></dependency>
   </dependencies>
   <build><plugins>
