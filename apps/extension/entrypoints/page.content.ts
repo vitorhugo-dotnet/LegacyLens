@@ -18,8 +18,8 @@ export default defineContentScript({
       const detail = (event as CustomEvent).detail as { nonce?: string; traceId?: string; origin?: string };
       if (!detail || typeof detail.nonce !== 'string' || !/^[a-f0-9]{32}$/i.test(detail.traceId ?? '') || detail.origin !== location.origin) return;
       uninstall?.(); nonce = detail.nonce; traceId = detail.traceId!;
-      const page = globalThis as typeof globalThis & { PrimeFaces?: { VERSION?: unknown } };
-      adapter = selectPrimeFacesAdapter(page.PrimeFaces?.VERSION);
+      const page = globalThis as typeof globalThis & { PrimeFaces?: { VERSION?: unknown; ajax?: { Request?: { handle?: unknown } } } };
+      adapter = selectPrimeFacesAdapter(page.PrimeFaces);
       const nextSpanId = () => {
         let id: string;
         do { id = [...crypto.getRandomValues(new Uint8Array(8))].map((n) => n.toString(16).padStart(2, '0')).join(''); }

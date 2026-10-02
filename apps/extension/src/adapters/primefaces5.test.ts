@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { PrimeFacesAdapter } from './primefaces5.ts';
 
 describe('PrimeFacesAdapter', () => {
+  it('reports experimental support when the legacy API is present without a version', () => {
+    Object.assign(globalThis, { PrimeFaces: { ajax: { Request: { handle() {} } } }, jQuery: { ajaxPrefilter() {} } });
+    const diagnostics: string[] = [];
+    const adapter = new PrimeFacesAdapter();
+    adapter.install({ origin: 'https://app.example', traceId: 'a'.repeat(32), nextSpanId: () => 'b'.repeat(16), onAjax() {}, onDiagnostic: (code) => diagnostics.push(code) });
+    expect(diagnostics).toContain('PRIMEFACES_VERSION_EXPERIMENTAL');
+  });
+
   it('does not link Ajax without the selected PrimeFaces invocation', () => {
     Object.assign(globalThis, { PrimeFaces: { ajax: { Request: { handle() {} } } }, jQuery: { ajaxPrefilter() {} } });
     const calls: Array<{ source?: string; traceparent?: string }> = [];

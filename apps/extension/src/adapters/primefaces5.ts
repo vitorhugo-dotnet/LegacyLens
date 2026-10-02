@@ -46,8 +46,9 @@ export class PrimeFacesAdapter {
 
   install(context: PageCaptureContext): () => void {
     this.context = context;
-    const page = globalThis as typeof globalThis & { PrimeFaces?: { ajax?: { Request?: Request } }; jQuery?: JQuery };
+    const page = globalThis as typeof globalThis & { PrimeFaces?: { VERSION?: unknown; ajax?: { Request?: Request } }; jQuery?: JQuery };
     const request = page.PrimeFaces?.ajax?.Request;
+    if (page.PrimeFaces?.VERSION == null) diagnostic(context, 'PRIMEFACES_VERSION_EXPERIMENTAL');
     if (typeof request?.handle !== 'function' || typeof page.jQuery?.ajaxPrefilter !== 'function') {
       diagnostic(context, 'UNSUPPORTED_PRIMEFACES_PAGE');
       this.context = undefined;
