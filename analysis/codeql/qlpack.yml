@@ -1,0 +1,5 @@
+name: legacylens/codeql-analysis
+version: 0.1.0
+description: Informational Java call and Servlet handler queries for LegacyLens.
+dependencies:
+  codeql/java-all: "*"

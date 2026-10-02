@@ -1,0 +1,18 @@
+{
+  "#select": {
+    "columns": [
+      { "name": "callerName", "kind": "string" },
+      { "name": "callerPath", "kind": "string" },
+      { "name": "callerLine", "kind": "int" },
+      { "name": "callerColumn", "kind": "int" },
+      { "name": "calleeName", "kind": "string" },
+      { "name": "calleePath", "kind": "string" },
+      { "name": "calleeLine", "kind": "int" },
+      { "name": "calleeColumn", "kind": "int" },
+      { "name": "callPath", "kind": "string" },
+      { "name": "callLine", "kind": "int" },
+      { "name": "callColumn", "kind": "int" }
+    ],
+    "rows": [["OrderService.save", "src/OrderService.java", 20, 5, "OrderDao.persist", "src/OrderDao.java", 11, 5, "src/OrderService.java", 27, 9]]
+  }
+}
