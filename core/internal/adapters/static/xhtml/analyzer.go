@@ -18,7 +18,7 @@ type Analyzer struct{}
 
 func NewAnalyzer() *Analyzer { return &Analyzer{} }
 func (Analyzer) Capabilities() []application.Capability {
-	return []application.Capability{{Name: "xhtml-action", Supported: true, Description: "Extracts JSF action expressions from XHTML."}}
+	return []application.Capability{{Name: "xhtml-action", Supported: true, Description: "Extracts JSF action expressions and browser handlers from XHTML."}}
 }
 
 func (Analyzer) Analyze(ctx context.Context, input application.AnalysisInput) (application.AnalysisResult, error) {
@@ -40,7 +40,7 @@ func (Analyzer) Analyze(ctx context.Context, input application.AnalysisInput) (a
 			token, err := decoder.Token()
 			if err != nil {
 				if err != io.EOF {
-					result.Diagnostics = append(result.Diagnostics, domain.Diagnostic{ID: makeID(string(input.ProjectID), artifact.Path, "invalid-xml"), Code: "xhtml.invalid", Message: "XHTML could not be parsed safely", Severity: "warning"})
+					result.Diagnostics = append(result.Diagnostics, domain.Diagnostic{ID: makeID(string(input.ProjectID), string(input.RevisionID), artifact.Path, "invalid-xml"), Code: "xhtml.invalid", Message: "XHTML could not be parsed safely", Severity: "warning"})
 				}
 				break
 			}
@@ -48,12 +48,26 @@ func (Analyzer) Analyze(ctx context.Context, input application.AnalysisInput) (a
 			if !ok {
 				continue
 			}
+			var remoteName string
+			addedSymbol := false
+			if strings.EqualFold(start.Name.Local, "remoteCommand") {
+				for _, attr := range start.Attr {
+					if strings.EqualFold(attr.Name.Local, "name") {
+						remoteName = strings.TrimSpace(attr.Value)
+					}
+				}
+			}
 			for _, attr := range start.Attr {
-				if !strings.EqualFold(attr.Name.Local, "action") {
+				attribute := strings.ToLower(attr.Name.Local)
+				if attribute != "action" && attribute != "actionlistener" && !strings.HasPrefix(attribute, "on") {
 					continue
 				}
 				expression := strings.TrimSpace(attr.Value)
-				if !(strings.HasPrefix(expression, "#{") && strings.HasSuffix(expression, "}") || strings.HasPrefix(expression, "${") && strings.HasSuffix(expression, "}")) {
+				isAction := attribute == "action" || attribute == "actionlistener"
+				if isAction && !(strings.HasPrefix(expression, "#{") && strings.HasSuffix(expression, "}") || strings.HasPrefix(expression, "${") && strings.HasSuffix(expression, "}")) {
+					continue
+				}
+				if !isAction && !strings.HasSuffix(expression, "()") {
 					continue
 				}
 				offset := int(decoder.InputOffset())
@@ -69,17 +83,49 @@ func (Analyzer) Analyze(ctx context.Context, input application.AnalysisInput) (a
 				column := 1 + utf8.RuneCount(source[lineStart:startOffset])
 				location := &domain.Location{Path: artifact.Path, Line: line, Column: column}
 				elementOffset := strconv.Itoa(startOffset)
-				symbolID := makeID(string(input.ProjectID), artifact.Path, elementOffset, start.Name.Local)
-				destination := makeID(string(input.ProjectID), "dynamic-action", expression)
-				evidenceID := makeID(string(input.ProjectID), artifact.Path, elementOffset, "action-evidence", expression)
-				result.Symbols = append(result.Symbols, domain.Symbol{ID: symbolID, ProjectID: input.ProjectID, RevisionID: input.RevisionID, ArtifactID: artifact.ID, Path: artifact.Path, QualifiedName: artifact.Path + "#" + start.Name.Local, Kind: "component", Location: location})
+				symbolID := makeID(string(input.ProjectID), string(input.RevisionID), artifact.Path, elementOffset, start.Name.Local)
+				name, kind := artifact.Path+"#"+start.Name.Local, "component"
+				if remoteName != "" {
+					name, kind = remoteName, "remote-command"
+				}
+				var destination domain.ID
+				relationKind, resolution := "action", domain.ResolutionDynamic
+				if isAction {
+					destination = makeID(string(input.ProjectID), string(input.RevisionID), "dynamic-action", expression)
+				} else {
+					name := strings.TrimSuffix(expression, "()")
+					if !simpleName(name) {
+						continue
+					}
+					destination = makeID(string(input.ProjectID), string(input.RevisionID), "javascript-call", name)
+					relationKind, resolution = "handler", domain.ResolutionUnresolved
+				}
+				evidenceID := makeID(string(input.ProjectID), string(input.RevisionID), artifact.Path, elementOffset, attribute, expression)
+				if !addedSymbol {
+					result.Symbols = append(result.Symbols, domain.Symbol{ID: symbolID, ProjectID: input.ProjectID, RevisionID: input.RevisionID, ArtifactID: artifact.ID, Path: artifact.Path, QualifiedName: name, Kind: kind, Location: location})
+					addedSymbol = true
+				}
 				result.Evidence = append(result.Evidence, domain.Evidence{ID: evidenceID, Kind: "source", Source: expression, Location: location})
 				target := destination
-				result.Relations = append(result.Relations, domain.Relation{ID: makeID(string(symbolID), "action", string(target)), FromID: symbolID, ToID: &target, Kind: "action", EvidenceIDs: []domain.ID{evidenceID}, Resolution: domain.ResolutionDynamic, Layer: domain.LayerStatic, Location: location})
+				result.Relations = append(result.Relations, domain.Relation{ID: makeID(string(symbolID), relationKind, attribute, string(target)), FromID: symbolID, ToID: &target, Kind: relationKind, EvidenceIDs: []domain.ID{evidenceID}, Resolution: resolution, Layer: domain.LayerStatic, Location: location})
 			}
 		}
 	}
 	return result, nil
+}
+
+func simpleName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c == '_' || c == '$' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && c >= '0' && c <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func makeID(parts ...string) domain.ID {

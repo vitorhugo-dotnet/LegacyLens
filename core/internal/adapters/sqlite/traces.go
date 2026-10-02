@@ -264,7 +264,7 @@ func (s *Store) LoadInvestigationIndex(ctx context.Context, projectID domain.ID)
 	var snapshot application.InvestigationIndex
 	// The indexed graph is a separate static layer. Use one revision as a unit;
 	// its relation evidence never becomes proof that the trace executed it.
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM revisions WHERE project_id=? ORDER BY created_at DESC,id DESC LIMIT 1`, projectID).Scan(&snapshot.RevisionID)
+	err := s.db.QueryRowContext(ctx, `SELECT revision_id FROM current_index WHERE project_id=?`, projectID).Scan(&snapshot.RevisionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return snapshot, nil
 	}

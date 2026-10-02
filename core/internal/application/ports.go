@@ -18,6 +18,16 @@ type IndexStore interface {
 	Explore(context.Context, GraphQuery) (GraphResult, error)
 }
 
+// IndexStateStore supplies the current artifact set for an incremental update.
+// Older revisions remain available to investigations and traces.
+type IndexStateStore interface {
+	LatestArtifacts(context.Context, domain.ID) ([]domain.Artifact, error)
+}
+
+type ExpressionResolver interface {
+	Resolve(string, []domain.Symbol) ([]domain.Relation, []domain.Diagnostic)
+}
+
 // ProjectStore persists registered projects independently of the storage adapter.
 type ProjectStore interface {
 	SaveProject(context.Context, domain.Project) error

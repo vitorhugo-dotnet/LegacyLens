@@ -19,6 +19,8 @@ import (
 	"legacylens/core/internal/adapters/intellij"
 	"legacylens/core/internal/adapters/localapi"
 	"legacylens/core/internal/adapters/sqlite"
+	"legacylens/core/internal/adapters/static/el"
+	"legacylens/core/internal/adapters/static/javascript"
 	"legacylens/core/internal/adapters/static/xhtml"
 	"legacylens/core/internal/application"
 	"legacylens/core/internal/domain"
@@ -87,7 +89,7 @@ func openStore() (*sqlite.Store, error) {
 
 func runtimeServices(store *sqlite.Store) localapi.Services {
 	projects := application.NewProjectService(store)
-	indexer := application.NewIndexer(store, store, filesystem.NewSource(), []application.Analyzer{xhtml.NewAnalyzer()})
+	indexer := application.NewIndexer(store, store, filesystem.NewSource(), []application.Analyzer{xhtml.NewAnalyzer(), javascript.NewAnalyzer()}).WithExpressionResolver(el.NewResolver())
 	captures := application.NewCaptureService(store, application.CaptureConfig{})
 	locations := application.NewLocationService(store, intellij.NewEditor(os.Getenv("LEGACYLENS_INTELLIJ_LAUNCHER"), nil))
 	presence := application.NewAgentPresence(time.Now, 15*time.Second, 128)

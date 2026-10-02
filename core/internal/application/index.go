@@ -15,13 +15,23 @@ type Indexer struct {
 	projects  ProjectStore
 	source    ArtifactSource
 	analyzers []Analyzer
+	resolver  ExpressionResolver
 }
 
 func NewIndexer(store IndexStore, projects ProjectStore, source ArtifactSource, analyzers []Analyzer) *Indexer {
 	return &Indexer{store: store, projects: projects, source: source, analyzers: append([]Analyzer(nil), analyzers...)}
 }
 
+func (i *Indexer) WithExpressionResolver(resolver ExpressionResolver) *Indexer {
+	i.resolver = resolver
+	return i
+}
+
 func (i *Indexer) Index(ctx context.Context, request IndexRequest) (IndexResult, error) {
+	return i.index(ctx, request, len(request.Paths) == 0)
+}
+
+func (i *Indexer) index(ctx context.Context, request IndexRequest, incremental bool) (IndexResult, error) {
 	if i == nil || i.store == nil || i.projects == nil || i.source == nil {
 		return IndexResult{}, errors.New("indexer dependencies are required")
 	}
@@ -69,6 +79,40 @@ func (i *Indexer) Index(ctx context.Context, request IndexRequest) (IndexResult,
 		result.Relations = append(result.Relations, analysis.Relations...)
 		result.Evidence = append(result.Evidence, analysis.Evidence...)
 		result.Diagnostics = append(result.Diagnostics, analysis.Diagnostics...)
+	}
+	i.resolveBrowserRelations(&result)
+	// Check once more after analyzer work, before publishing a revision. A file
+	// changing between enumeration, read, and analysis cannot enter the index.
+	for _, artifact := range artifacts {
+		content, err := i.source.Read(ctx, project, artifact)
+		if err != nil {
+			return IndexResult{}, err
+		}
+		digest := sha256.Sum256(content)
+		if hex.EncodeToString(digest[:]) != artifact.ContentHash {
+			return IndexResult{}, fmt.Errorf("source changed during indexing: %s", artifact.Path)
+		}
+	}
+	if incremental {
+		if state, ok := i.store.(IndexStateStore); ok {
+			previous, err := state.LatestArtifacts(ctx, project.ID)
+			if err != nil {
+				return IndexResult{}, err
+			}
+			current := make(map[string]string, len(artifacts))
+			for _, artifact := range artifacts {
+				current[artifact.Path] = artifact.ContentHash
+			}
+			for _, artifact := range previous {
+				if hash, exists := current[artifact.Path]; !exists {
+					result.ExcludedFiles = append(result.ExcludedFiles, artifact.Path)
+				} else if hash != artifact.ContentHash {
+					result.ReplacedFiles = append(result.ReplacedFiles, artifact.Path)
+				}
+			}
+			sort.Strings(result.ExcludedFiles)
+			sort.Strings(result.ReplacedFiles)
+		}
 	}
 	if err := i.store.CommitIndex(ctx, result); err != nil {
 		return IndexResult{}, err

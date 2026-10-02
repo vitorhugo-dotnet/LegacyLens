@@ -194,6 +194,9 @@ func (s *Store) CommitIndex(ctx context.Context, result application.IndexResult)
 	var exists int
 	err = tx.QueryRowContext(ctx, `SELECT 1 FROM revisions WHERE id=?`, result.RevisionID).Scan(&exists)
 	if err == nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO current_index(project_id,revision_id) VALUES(?,?) ON CONFLICT(project_id) DO UPDATE SET revision_id=excluded.revision_id`, result.ProjectID, result.RevisionID); err != nil {
+			return err
+		}
 		return tx.Commit()
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -232,7 +235,31 @@ func (s *Store) CommitIndex(ctx context.Context, result application.IndexResult)
 			return err
 		}
 	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO current_index(project_id,revision_id) VALUES(?,?) ON CONFLICT(project_id) DO UPDATE SET revision_id=excluded.revision_id`, result.ProjectID, result.RevisionID); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+func (s *Store) LatestArtifacts(ctx context.Context, projectID domain.ID) ([]domain.Artifact, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT a.value_json FROM artifacts AS a JOIN current_index AS c ON c.project_id=a.project_id AND c.revision_id=a.revision_id WHERE a.project_id=? ORDER BY a.path`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var artifacts []domain.Artifact
+	for rows.Next() {
+		var encoded string
+		if err := rows.Scan(&encoded); err != nil {
+			return nil, err
+		}
+		var artifact domain.Artifact
+		if err := json.Unmarshal([]byte(encoded), &artifact); err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts, rows.Err()
 }
 
 func insertJSON(ctx context.Context, tx *sql.Tx, query string, args ...any) error {
