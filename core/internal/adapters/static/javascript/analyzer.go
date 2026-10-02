@@ -1,6 +1,7 @@
 package javascript
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -29,6 +30,7 @@ type token struct {
 type functionNode struct {
 	name                      string
 	start, bodyStart, bodyEnd int
+	kind                      string
 }
 type callNode struct {
 	name   string
@@ -53,19 +55,34 @@ func (Analyzer) Analyze(ctx context.Context, input application.AnalysisInput) (a
 		}
 		tokens, diagnostics := lex(source)
 		for _, diagnostic := range diagnostics {
-			diagnostic.ID = id(string(input.ProjectID), string(input.RevisionID), artifact.Path, diagnostic.Code)
+			position := ""
+			if diagnostic.Location != nil {
+				diagnostic.Location.Path = artifact.Path
+				position = fmt.Sprintf("%d:%d", diagnostic.Location.Line, diagnostic.Location.Column)
+			}
+			diagnostic.ID = id(string(input.ProjectID), string(input.RevisionID), artifact.Path, diagnostic.Code, position)
 			result.Diagnostics = append(result.Diagnostics, diagnostic)
 		}
-		functions := functionsIn(tokens)
+		functions := functionsIn(tokens, source)
 		byName := make(map[string]domain.Symbol)
 		for _, fn := range functions {
 			location := at(artifact.Path, source, fn.start)
-			symbol := domain.Symbol{ID: id(string(input.ProjectID), string(input.RevisionID), artifact.Path, "function", fn.name, fmt.Sprint(fn.start)), ProjectID: input.ProjectID, RevisionID: input.RevisionID, ArtifactID: artifact.ID, Path: artifact.Path, QualifiedName: fn.name, Kind: "javascript-function", Location: location}
+			kind := fn.kind
+			if kind == "" {
+				kind = "javascript-function"
+			}
+			symbol := domain.Symbol{ID: id(string(input.ProjectID), string(input.RevisionID), artifact.Path, "function", fn.name, fmt.Sprint(fn.start)), ProjectID: input.ProjectID, RevisionID: input.RevisionID, ArtifactID: artifact.ID, Path: artifact.Path, QualifiedName: fn.name, Kind: kind, Location: location}
 			byName[fn.name] = symbol
 			result.Symbols = append(result.Symbols, symbol)
 		}
-		for _, call := range callsIn(tokens, functions) {
+		for _, call := range callsIn(tokens, functions, source) {
 			owner, ok := byName[call.owner]
+			if !ok && call.owner == "<module>" {
+				owner = domain.Symbol{ID: id(string(input.ProjectID), string(input.RevisionID), artifact.Path, "module"), ProjectID: input.ProjectID, RevisionID: input.RevisionID, ArtifactID: artifact.ID, Path: artifact.Path, QualifiedName: artifact.Path, Kind: "javascript-module", Location: at(artifact.Path, source, 0)}
+				byName[call.owner] = owner
+				result.Symbols = append(result.Symbols, owner)
+				ok = true
+			}
 			if !ok {
 				continue
 			}
@@ -120,6 +137,7 @@ func lex(source []byte) ([]token, []domain.Diagnostic) {
 		}
 		if c == '\'' || c == '"' || c == '`' {
 			start, quote := i, c
+			interpolation := false
 			i++
 			for i < len(source) {
 				if source[i] == '\\' {
@@ -130,12 +148,18 @@ func lex(source []byte) ([]token, []domain.Diagnostic) {
 					i++
 					break
 				}
+				if quote == '`' && source[i] == '$' && i+1 < len(source) && source[i+1] == '{' {
+					interpolation = true
+				}
 				i++
 			}
 			if i > len(source) {
 				i = len(source)
 			}
 			out = append(out, token{text: string(source[start:i]), offset: start, kind: 's'})
+			if interpolation {
+				diagnostics = append(diagnostics, domain.Diagnostic{Code: "javascript.unsupported_syntax", Message: "Template interpolation is not analyzed", Severity: "warning", Location: at("", source, start)})
+			}
 			continue
 		}
 		if c == '/' && regexStart(out) {
@@ -188,7 +212,7 @@ func identStart(c byte) bool {
 }
 func identPart(c byte) bool { return identStart(c) || c >= '0' && c <= '9' }
 
-func functionsIn(tokens []token) []functionNode {
+func functionsIn(tokens []token, source []byte) []functionNode {
 	var nodes []functionNode
 	for i := 0; i+3 < len(tokens); i++ {
 		if tokens[i].text == "function" && tokens[i+1].kind == 'i' {
@@ -202,47 +226,107 @@ func functionsIn(tokens []token) []functionNode {
 			}
 			nodes = append(nodes, functionNode{name: tokens[i+1].text, start: tokens[i+1].offset, bodyStart: body + 1, bodyEnd: end})
 		} else if (tokens[i].text == "const" || tokens[i].text == "let" || tokens[i].text == "var") && tokens[i+1].kind == 'i' && tokens[i+2].text == "=" {
-			arrow := i + 3
-			if tokens[arrow].text == "async" {
-				arrow++
+			start, end, ok := arrowBody(tokens, i+3, source)
+			if ok {
+				nodes = append(nodes, functionNode{name: tokens[i+1].text, start: tokens[i+1].offset, bodyStart: start, bodyEnd: end})
 			}
-			if arrow >= len(tokens) {
-				continue
-			}
-			if tokens[arrow].text == "(" {
-				end := matching(tokens, arrow, "(", ")")
-				if end < 0 {
-					continue
-				}
-				arrow = end + 1
-			} else if tokens[arrow].kind == 'i' {
-				arrow++
-			} else {
-				continue
-			}
-			if arrow+2 >= len(tokens) || tokens[arrow].text != "=" || tokens[arrow+1].text != ">" {
-				continue
-			}
-			body := arrow + 2
-			if tokens[body].text == "{" {
-				end := matching(tokens, body, "{", "}")
-				if end < 0 {
-					continue
-				}
-				nodes = append(nodes, functionNode{name: tokens[i+1].text, start: tokens[i+1].offset, bodyStart: body + 1, bodyEnd: end})
-			} else {
-				nodes = append(nodes, functionNode{name: tokens[i+1].text, start: tokens[i+1].offset, bodyStart: body, bodyEnd: expressionEnd(tokens, body)})
-			}
+		}
+	}
+	for i := 0; i+1 < len(tokens); i++ {
+		if tokens[i].text != "addEventListener" || tokens[i+1].text != "(" {
+			continue
+		}
+		argument := eventHandlerArgument(tokens, i+1)
+		if argument < 0 {
+			continue
+		}
+		start, end, ok := arrowBody(tokens, argument, source)
+		if ok {
+			nodes = append(nodes, functionNode{name: callbackName(tokens[argument].offset), start: tokens[argument].offset, bodyStart: start, bodyEnd: end, kind: "javascript-callback"})
 		}
 	}
 	return nodes
 }
 
-func expressionEnd(tokens []token, start int) int {
+func arrowBody(tokens []token, start int, source []byte) (int, int, bool) {
+	if start >= len(tokens) {
+		return 0, 0, false
+	}
+	arrow := start
+	if tokens[arrow].text == "async" {
+		arrow++
+	}
+	if arrow >= len(tokens) {
+		return 0, 0, false
+	}
+	if tokens[arrow].text == "(" {
+		end := matching(tokens, arrow, "(", ")")
+		if end < 0 {
+			return 0, 0, false
+		}
+		arrow = end + 1
+	} else if tokens[arrow].kind == 'i' {
+		arrow++
+	} else {
+		return 0, 0, false
+	}
+	if arrow+2 >= len(tokens) || tokens[arrow].text != "=" || tokens[arrow+1].text != ">" {
+		return 0, 0, false
+	}
+	body := arrow + 2
+	if tokens[body].text == "{" {
+		end := matching(tokens, body, "{", "}")
+		if end < 0 {
+			return 0, 0, false
+		}
+		return body + 1, end, true
+	}
+	return body, expressionEnd(tokens, body, source), true
+}
+
+func callbackName(offset int) string { return fmt.Sprintf("callback@%d", offset) }
+
+func eventHandlerArgument(tokens []token, open int) int {
+	end := matching(tokens, open, "(", ")")
+	if end < 0 {
+		return -1
+	}
+	parens, brackets, braces := 0, 0, 0
+	for i := open + 1; i < end; i++ {
+		switch tokens[i].text {
+		case "(":
+			parens++
+		case ")":
+			parens--
+		case "[":
+			brackets++
+		case "]":
+			brackets--
+		case "{":
+			braces++
+		case "}":
+			braces--
+		case ",":
+			if parens == 0 && brackets == 0 && braces == 0 && i+1 < end {
+				return i + 1
+			}
+		}
+	}
+	return -1
+}
+
+func expressionEnd(tokens []token, start int, source []byte) int {
 	parens, brackets, braces := 0, 0, 0
 	for i := start; i < len(tokens); i++ {
 		value := tokens[i].text
-		if parens == 0 && brackets == 0 && braces == 0 && (value == ";" || value == "," || value == "}") {
+		if parens == 0 && brackets == 0 && braces == 0 && (value == ";" || value == "," || value == "}" || value == ")") {
+			return i
+		}
+		previousEnd := 0
+		if i > start {
+			previousEnd = tokens[i-1].offset + len(tokens[i-1].text)
+		}
+		if i > start && parens == 0 && brackets == 0 && braces == 0 && declarationToken(value) && bytes.IndexByte(source[previousEnd:tokens[i].offset], '\n') >= 0 {
 			return i
 		}
 		switch value {
@@ -267,6 +351,14 @@ func expressionEnd(tokens []token, start int) int {
 		}
 	}
 	return len(tokens)
+}
+
+func declarationToken(value string) bool {
+	switch value {
+	case "const", "let", "var", "function", "class", "export", "import":
+		return true
+	}
+	return false
 }
 func findAfter(tokens []token, start int, value string) int {
 	for i := start; i < len(tokens); i++ {
@@ -294,19 +386,35 @@ func matching(tokens []token, start int, open, close string) int {
 	}
 	return -1
 }
-func callsIn(tokens []token, functions []functionNode) []callNode {
+func callsIn(tokens []token, functions []functionNode, source []byte) []callNode {
 	var calls []callNode
+	callbacks := map[int]functionNode{}
+	for _, fn := range functions {
+		if fn.kind == "javascript-callback" {
+			callbacks[fn.start] = fn
+		}
+	}
 	for _, fn := range functions {
 		for i := fn.bodyStart; i+1 < fn.bodyEnd; i++ {
+			insideCallback := false
+			for _, callback := range callbacks {
+				if callback.name != fn.name && i >= callback.bodyStart && i < callback.bodyEnd {
+					insideCallback = true
+					break
+				}
+			}
+			if insideCallback {
+				continue
+			}
 			if tokens[i].text == "addEventListener" && i > 0 && tokens[i-1].text == "." && tokens[i+1].text == "(" {
-				end := matching(tokens, i+1, "(", ")")
-				if end > i+3 {
-					for j := i + 2; j+1 < end; j++ {
-						if tokens[j].text == "," && tokens[j+1].kind == 'i' {
-							name := tokens[j+1].text
-							calls = append(calls, callNode{name: name, owner: fn.name, kind: "handler", offset: tokens[i].offset, source: "addEventListener(..., " + name + ")"})
-							break
-						}
+				argument := eventHandlerArgument(tokens, i+1)
+				if argument >= 0 {
+					if callback, ok := callbacks[tokens[argument].offset]; ok {
+						end := matching(tokens, i+1, "(", ")")
+						calls = append(calls, callNode{name: callback.name, owner: fn.name, kind: "handler", offset: tokens[i].offset, source: string(source[tokens[i].offset : tokens[end].offset+1])})
+					} else if tokens[argument].kind == 'i' {
+						name := tokens[argument].text
+						calls = append(calls, callNode{name: name, owner: fn.name, kind: "handler", offset: tokens[i].offset, source: "addEventListener(..., " + name + ")"})
 					}
 				}
 				continue
@@ -326,6 +434,32 @@ func callsIn(tokens []token, functions []functionNode) []callNode {
 				kind = "request"
 			}
 			calls = append(calls, callNode{name: tokens[i].text, owner: fn.name, kind: kind, offset: tokens[i].offset, source: tokens[i].text + "()"})
+		}
+	}
+	for i := 0; i+1 < len(tokens); i++ {
+		if tokens[i].text != "addEventListener" || tokens[i+1].text != "(" || i == 0 || tokens[i-1].text != "." {
+			continue
+		}
+		insideFunction := false
+		for _, fn := range functions {
+			if i >= fn.bodyStart && i < fn.bodyEnd {
+				insideFunction = true
+				break
+			}
+		}
+		if insideFunction {
+			continue
+		}
+		argument := eventHandlerArgument(tokens, i+1)
+		if argument < 0 {
+			continue
+		}
+		if callback, ok := callbacks[tokens[argument].offset]; ok {
+			end := matching(tokens, i+1, "(", ")")
+			calls = append(calls, callNode{name: callback.name, owner: "<module>", kind: "handler", offset: tokens[i].offset, source: string(source[tokens[i].offset : tokens[end].offset+1])})
+		} else if tokens[argument].kind == 'i' {
+			name := tokens[argument].text
+			calls = append(calls, callNode{name: name, owner: "<module>", kind: "handler", offset: tokens[i].offset, source: "addEventListener(..., " + name + ")"})
 		}
 	}
 	return calls

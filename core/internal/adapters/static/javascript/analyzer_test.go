@@ -2,6 +2,7 @@ package javascript
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"legacylens/core/internal/application"
@@ -92,4 +93,112 @@ const ignored = "fetch('/ignored')";`)
 	if !kinds["calls"] || !kinds["request"] || !kinds["handler"] {
 		t.Fatalf("arrow call classifications missing: %#v", result.Relations)
 	}
+}
+
+func TestResolveSemicolonlessArrowOwnership(t *testing.T) {
+	source := []byte("const first = () => second()\nconst second = () => fetch('/x')\n")
+	result, err := NewAnalyzer().Analyze(context.Background(), application.AnalysisInput{
+		ProjectID: "p", RevisionID: "r", Artifacts: []domain.Artifact{{ID: "js", Path: "handlers.js", Language: "javascript"}},
+		Sources: map[string][]byte{"handlers.js": source},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[domain.ID]string{}
+	for _, symbol := range result.Symbols {
+		names[symbol.ID] = symbol.QualifiedName
+	}
+	if len(result.Relations) != 2 {
+		t.Fatalf("ASI created false edges: %#v", result.Relations)
+	}
+	for _, relation := range result.Relations {
+		switch names[relation.FromID] {
+		case "first":
+			if relation.Kind != "calls" || relation.ToID == nil || names[*relation.ToID] != "second" {
+				t.Fatalf("first owns wrong edge: %#v", relation)
+			}
+		case "second":
+			if relation.Kind != "request" {
+				t.Fatalf("second owns wrong edge: %#v", relation)
+			}
+		default:
+			t.Fatalf("unexpected owner: %#v", relation)
+		}
+	}
+}
+
+func TestResolveAnonymousEventCallback(t *testing.T) {
+	source := []byte("function wire() { button.addEventListener('click', () => save()); }\nfunction save() {}")
+	result, err := NewAnalyzer().Analyze(context.Background(), application.AnalysisInput{
+		ProjectID: "p", RevisionID: "r", Artifacts: []domain.Artifact{{ID: "js", Path: "handlers.js", Language: "javascript"}},
+		Sources: map[string][]byte{"handlers.js": source},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[domain.ID]string{}
+	kinds := map[domain.ID]string{}
+	evidence := map[domain.ID]string{}
+	for _, symbol := range result.Symbols {
+		names[symbol.ID], kinds[symbol.ID] = symbol.QualifiedName, symbol.Kind
+	}
+	for _, item := range result.Evidence {
+		evidence[item.ID] = item.Source
+	}
+	if len(result.Relations) != 2 {
+		t.Fatalf("anonymous callback edges = %#v", result.Relations)
+	}
+	var callback domain.ID
+	for _, relation := range result.Relations {
+		if relation.Kind == "handler" && names[relation.FromID] == "wire" && relation.ToID != nil && kinds[*relation.ToID] == "javascript-callback" && relation.Resolution == domain.ResolutionResolved && len(relation.EvidenceIDs) == 1 && strings.Contains(evidence[relation.EvidenceIDs[0]], "() => save()") {
+			callback = *relation.ToID
+		}
+	}
+	if callback == "" {
+		t.Fatalf("handler has no source-backed callback target: %#v", result.Relations)
+	}
+	for _, relation := range result.Relations {
+		if relation.Kind == "calls" && relation.FromID == callback && relation.ToID != nil && names[*relation.ToID] == "save" && len(relation.EvidenceIDs) == 1 {
+			return
+		}
+	}
+	t.Fatalf("callback call was attributed to the wrong owner: %#v", result.Relations)
+}
+
+func TestResolveTopLevelAnonymousEventCallback(t *testing.T) {
+	source := []byte("button.addEventListener('click', () => save())\nfunction save() {}")
+	result, err := NewAnalyzer().Analyze(context.Background(), application.AnalysisInput{
+		ProjectID: "p", RevisionID: "r", Artifacts: []domain.Artifact{{ID: "js", Path: "handlers.js", Language: "javascript"}},
+		Sources: map[string][]byte{"handlers.js": source},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[domain.ID]string{}
+	for _, symbol := range result.Symbols {
+		kinds[symbol.ID] = symbol.Kind
+	}
+	for _, relation := range result.Relations {
+		if relation.Kind == "handler" && kinds[relation.FromID] == "javascript-module" && relation.ToID != nil && kinds[*relation.ToID] == "javascript-callback" && len(relation.EvidenceIDs) == 1 {
+			return
+		}
+	}
+	t.Fatalf("top-level handler registration was lost: symbols=%#v relations=%#v", result.Symbols, result.Relations)
+}
+
+func TestResolveTemplateInterpolationDiagnostic(t *testing.T) {
+	source := []byte("const first = () => `result ${fetch('/x')}`\n")
+	result, err := NewAnalyzer().Analyze(context.Background(), application.AnalysisInput{
+		ProjectID: "p", RevisionID: "r", Artifacts: []domain.Artifact{{ID: "js", Path: "handlers.js", Language: "javascript"}},
+		Sources: map[string][]byte{"handlers.js": source},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Code == "javascript.unsupported_syntax" && diagnostic.Location != nil && diagnostic.Location.Path == "handlers.js" && diagnostic.Location.Line == 1 {
+			return
+		}
+	}
+	t.Fatalf("template interpolation was silently omitted: %#v", result.Diagnostics)
 }
