@@ -48,14 +48,18 @@ jobs:
           if ($manifest.commit -ne $env:GITHUB_SHA -or $manifest.version -ne $env:GITHUB_REF_NAME) { throw 'Manifest provenance does not match tag SHA and version.' }
           if ($manifest.protocolVersion -ne 1 -or $manifest.platform -ne 'windows/amd64') { throw 'Manifest protocol or platform is unsupported.' }
           if ($manifest.componentVersions.core -ne $env:GITHUB_SHA -or $manifest.componentVersions.nativeHost -ne $env:GITHUB_SHA) { throw 'Core and native-host provenance does not match the tag SHA.' }
-          if (-not $manifest.componentVersions.extension -or -not $manifest.componentVersions.javaAgent -or -not $manifest.componentVersions.javaRuntime -or -not $manifest.componentVersions.goToolchain -or -not $manifest.componentVersions.nodeToolchain) { throw 'Manifest is missing component or toolchain versions.' }
+          if (-not $manifest.componentVersions.extension -or -not $manifest.componentVersions.javaAgent -or -not $manifest.componentVersions.javaAnalyzer -or -not $manifest.componentVersions.javaRuntime -or -not $manifest.componentVersions.goToolchain -or -not $manifest.componentVersions.nodeToolchain) { throw 'Manifest is missing component or toolchain versions.' }
+          [xml]$analyzerPom = Get-Content java/analyzer/pom.xml -Raw
+          $analyzerVersion = $analyzerPom.project.parent.version
+          if ($manifest.componentVersions.javaAnalyzer -ne $analyzerVersion) { throw 'Analyzer version does not match checked source provenance.' }
+          if (-not (Test-Path (Join-Path $expandedPath 'analyzer/legacylens-analyzer.jar'))) { throw 'Packaged Java analyzer is missing.' }
           $extensionManifest = Get-Content (Join-Path $expandedPath 'extension/manifest.json') -Raw | ConvertFrom-Json
           if ($extensionManifest.version -ne $manifest.componentVersions.extension) { throw 'Extension manifest version does not match package provenance.' }
-          $requiredChecks = @('contracts','extension','core','java8-runtime','java8-agent-smoke','java21-runtime','java21-agent-smoke','legacy-fixture','legacy-e2e','packaged-core-smoke','packaged-agent-smoke')
+          $requiredChecks = @('contracts','extension','core','java8-runtime','java8-agent-smoke','java8-analyzer-smoke','java21-runtime','java21-agent-smoke','java21-analyzer-smoke','legacy-fixture','legacy-e2e','packaged-core-smoke','packaged-agent-smoke','packaged-analyzer-smoke')
           foreach ($check in $requiredChecks) { if ($manifest.verificationResults.$check -ne 'passed') { throw "Required verification is missing or not passed: $check" } }
           if ($manifest.releasePrerequisites.task11JavaWorker -ne 'complete' -or $manifest.releasePrerequisites.task17ModernFixture -ne 'complete') { throw 'Release is blocked until Task11 Java worker and Task17 modern fixture assets and checks are complete.' }
           foreach ($asset in $manifest.releasePrerequisites.requiredAssets) { if (-not (Test-Path (Join-Path $expandedPath $asset))) { throw "Required release asset is missing: $asset" } }
-          foreach ($file in @('legacylens.exe','legacylens-host.exe','agent/legacylens-agent.jar','extension/manifest.json','LICENSE','README.md')) { if (-not (Test-Path (Join-Path $expandedPath $file))) { throw "Package is missing required file: $file" } }
+          foreach ($file in @('legacylens.exe','legacylens-host.exe','agent/legacylens-agent.jar','analyzer/legacylens-analyzer.jar','extension/manifest.json','LICENSE','README.md')) { if (-not (Test-Path (Join-Path $expandedPath $file))) { throw "Package is missing required file: $file" } }
       - name: Publish verified assets
         env:
           GH_TOKEN: ${{ github.token }}

@@ -51,8 +51,19 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           if ((java -version 2>&1 | Select-Object -First 1) -notmatch '1\.8\.') { throw 'Expected Java 8 runtime.' }
-          mvn -B -f java/pom.xml -pl agent -am verify
+          mvn -B -f java/pom.xml -pl agent,analyzer -am verify
           ./scripts/test-agent-smoke.ps1 -AgentJar java/agent/target/agent-0.1.0.jar -AgentSmokeClassPath java/agent/target/test-classes
+          $psi = [Diagnostics.ProcessStartInfo]::new((Get-Command java).Source)
+          $psi.ArgumentList.Add('-jar'); $psi.ArgumentList.Add((Resolve-Path java/analyzer/target/analyzer-0.1.0.jar).Path)
+          $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.UseShellExecute = $false
+          $process = [Diagnostics.Process]::Start($psi)
+          $process.StandardInput.WriteLine('{"projectId":"smoke","revisionId":"smoke","artifacts":[{"id":"a1","path":"Sample.java","language":"java"}],"sources":{"Sample.java":"class Sample { void run() {} }"}}')
+          $process.StandardInput.Close()
+          $output = $process.StandardOutput.ReadToEnd(); $process.WaitForExit()
+          $lines = @($output.TrimEnd("`r", "`n") -split "`r?`n")
+          if ($process.ExitCode -ne 0 -or $lines.Count -ne 1) { throw 'Shaded analyzer JSONL smoke did not return exactly one result.' }
+          $result = $lines[0] | ConvertFrom-Json
+          if (@($result.symbols).Count -lt 1 -or @($result.PSObject.Properties.Name | Where-Object { $_ -in @('symbols','relations','evidence','diagnostics') }).Count -ne 4) { throw 'Shaded analyzer JSONL smoke returned an invalid AnalysisResult.' }
       - name: Test Java 21 runtime
         uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
         with:
@@ -64,8 +75,19 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           if ((java -version 2>&1 | Select-Object -First 1) -notmatch '21\.') { throw 'Expected Java 21 runtime.' }
-          mvn -B -f java/pom.xml -pl agent -am verify
+          mvn -B -f java/pom.xml -pl agent,analyzer -am verify
           ./scripts/test-agent-smoke.ps1 -AgentJar java/agent/target/agent-0.1.0.jar -AgentSmokeClassPath java/agent/target/test-classes
+          $psi = [Diagnostics.ProcessStartInfo]::new((Get-Command java).Source)
+          $psi.ArgumentList.Add('-jar'); $psi.ArgumentList.Add((Resolve-Path java/analyzer/target/analyzer-0.1.0.jar).Path)
+          $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.UseShellExecute = $false
+          $process = [Diagnostics.Process]::Start($psi)
+          $process.StandardInput.WriteLine('{"projectId":"smoke","revisionId":"smoke","artifacts":[{"id":"a1","path":"Sample.java","language":"java"}],"sources":{"Sample.java":"class Sample { void run() {} }"}}')
+          $process.StandardInput.Close()
+          $output = $process.StandardOutput.ReadToEnd(); $process.WaitForExit()
+          $lines = @($output.TrimEnd("`r", "`n") -split "`r?`n")
+          if ($process.ExitCode -ne 0 -or $lines.Count -ne 1) { throw 'Shaded analyzer JSONL smoke did not return exactly one result.' }
+          $result = $lines[0] | ConvertFrom-Json
+          if (@($result.symbols).Count -lt 1 -or @($result.PSObject.Properties.Name | Where-Object { $_ -in @('symbols','relations','evidence','diagnostics') }).Count -ne 4) { throw 'Shaded analyzer JSONL smoke returned an invalid AnalysisResult.' }
 
   legacy-e2e:
     name: Legacy fixture and end-to-end browser flow
@@ -127,7 +149,7 @@ jobs:
         run: npm ci
       - name: Build Windows x64 package
         shell: pwsh
-        run: ./scripts/package-release.ps1 -OutputDirectory artifacts -VerifiedChecks @('contracts','extension','core','java8-runtime','java8-agent-smoke','java21-runtime','java21-agent-smoke','legacy-fixture','legacy-e2e')
+        run: ./scripts/package-release.ps1 -OutputDirectory artifacts -VerifiedChecks @('contracts','extension','core','java8-runtime','java8-agent-smoke','java8-analyzer-smoke','java21-runtime','java21-agent-smoke','java21-analyzer-smoke','legacy-fixture','legacy-e2e')
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

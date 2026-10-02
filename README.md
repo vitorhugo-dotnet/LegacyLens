@@ -10,7 +10,7 @@ LegacyLens é uma ferramenta local em desenvolvimento para investigar aplicaçõ
 - Host nativo Windows para comunicação local entre extensão e core.
 - Contratos versionados para mensagens e eventos.
 
-A análise Java estática, o worker Java, suporte amplo a linguagens e a fixture moderna ainda não estão implementados. O fluxo E2E da fixture antiga está falhando; CI executa esse cenário e deve permanecer vermelho até sua correção. Não há validação concluída contra o sistema privado nem em Windows 10.
+A análise Java estática e o worker Java estão implementados; suporte amplo a linguagens e a fixture moderna ainda não estão concluídos. O fluxo E2E da fixture antiga está falhando; CI executa esse cenário e deve permanecer vermelho até sua correção. Não há validação concluída contra o sistema privado nem em Windows 10.
 
 ## Arquitetura
 
@@ -26,10 +26,10 @@ npm test --workspace packages/contracts
 npm run typecheck --workspace apps/extension
 npm test --workspace apps/extension
 go -C core test ./...
-mvn -f java/pom.xml -pl agent -am verify
+mvn -f java/pom.xml -pl agent,analyzer -am verify
 ```
 
-O E2E requer Chromium de teste e a fixture local Maven; sua falha atual é conhecida e não representa validação de uma instalação real. O empacotamento inicial é Windows x64 e inclui core, host nativo, extensão unpacked e agente:
+O E2E requer Chromium de teste e a fixture local Maven; sua falha atual é conhecida e não representa validação de uma instalação real. O empacotamento inicial é Windows x64 e inclui core, host nativo, extensão unpacked, agente e analyzer Java sombreado:
 
 ```powershell
 ./scripts/package-release.ps1
@@ -41,4 +41,4 @@ Esse pacote é experimental e não promete instalador, registro automático do h
 
 O workflow de CI executa contratos, core, extensão, agente, fixture antiga e E2E. A release por tag `v*` só publica quando o workflow reutilizável termina com sucesso para o mesmo SHA da tag; falha, cancelamento ou job ignorado bloqueiam publicação. Até o E2E passar, releases ficam bloqueadas.
 
-O workflow instala o Chromium do Playwright, verifica o agente nos runtimes Java 8 e 21 e executa um smoke do core empacotado com Go e Node ausentes do `PATH`. Essas verificações não corrigem uma falha do E2E: o pacote e a publicação só podem avançar após o cenário passar. O worker de análise Java e a fixture moderna com redeploy continuam pendentes; o manifesto marca ambos como bloqueadores e o workflow de release os rejeita enquanto estiverem pendentes ou sem os artefatos exigidos. Ainda faltam testes de instalação/remoção do host e validação do sistema real em Windows 10. CI verde não provará compatibilidade com o sistema privado.
+O workflow instala o Chromium do Playwright, verifica o agente e o analyzer sombreado nos runtimes Java 8 e 21, e executa smokes do core, agente e analyzer empacotados. O smoke do core roda com Go e Node ausentes do `PATH`. Essas verificações não corrigem uma falha do E2E: pacote e publicação continuam condicionados ao cenário da fixture antiga e à fixture moderna com redeploy. O manifesto registra o analyzer como concluído e mantém a fixture moderna pendente; o workflow de release exige ambos os estados concluídos e os artefatos listados. Ainda faltam testes de instalação/remoção do host e validação do sistema real em Windows 10. CI verde não provará compatibilidade com o sistema privado.
