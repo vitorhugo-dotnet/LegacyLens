@@ -3,6 +3,7 @@ import type { Page, Worker } from '@playwright/test';
 interface CaptureReply { ok?: boolean; session?: { id?: string }; error?: string }
 
 async function sendFixtureCommand(worker: Worker, page: Page, message: { type: string; projectId?: string }): Promise<CaptureReply> {
+  worker.on('console', (entry) => console.log(`[extension] ${entry.text()}`));
   return await worker.evaluate(async ({ url, message: command }) => {
     const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
     if (tab?.id === undefined) throw new Error('fixture tab is unavailable');

@@ -125,6 +125,7 @@ async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?
     const projectId = options.projectId ?? await selectedProjectFor(tabId);
     if (!projectId) throw new Error('Selecione um projeto LegacyLens no submenu.');
     const projects = await client.request<ProjectListResult>('project.list', { offset: 0, limit: 200 });
+    if (fixtureMode) console.info('LegacyLens fixture capture: project.list completed');
     if (!projects.items.some((project) => project.id === projectId)) throw new Error('O projeto selecionado não está mais registrado.');
 
     if (options.injectScripts !== false) {
@@ -132,6 +133,7 @@ async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?
       await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/page.js'], world: 'MAIN' });
     }
     const session = await controller.start({ projectId, tabId, origin });
+    if (fixtureMode) console.info('LegacyLens fixture capture: capture.start completed');
     if (options.notifyContent !== false) {
       try {
         const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.begin', projectId, session, origin }) as { ok?: boolean; error?: string };
@@ -209,9 +211,17 @@ export default defineBackground(() => {
     const msg = message as Record<string, unknown>;
     const tabId = sender.tab?.id;
     const senderOrigin = originOf(sender.url);
-    if (tabId === undefined || !senderOrigin || !msg || typeof msg.type !== 'string') return;
+    if (!msg || typeof msg.type !== 'string') return;
+    if (tabId === undefined || !senderOrigin) {
+      if (fixtureMode && msg.type.startsWith('fixture.capture.')) {
+        respond({ error: `Invalid fixture sender context (tab=${tabId ?? 'missing'}, url=${sender.url ?? 'missing'})` });
+        return false;
+      }
+      return;
+    }
     const run = async () => {
       if (fixtureMode && msg.type === 'fixture.capture.start' && typeof msg.projectId === 'string') {
+        console.info('LegacyLens fixture capture: start command received');
         const selected = ((await chrome.storage.session.get(selectedProjectsKey))[selectedProjectsKey] ?? {}) as Record<string, string>;
         await chrome.storage.session.set({ [selectedProjectsKey]: { ...selected, [String(tabId)]: msg.projectId } });
         const session = await startCapture(sender.tab, { requestPermission: false, projectId: msg.projectId, notifyContent: false, injectScripts: false });
