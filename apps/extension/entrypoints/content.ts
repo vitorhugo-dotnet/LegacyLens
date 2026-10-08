@@ -17,7 +17,6 @@ export default defineContentScript({
     const global = globalThis as typeof globalThis & { __legacylensContentScriptInstalled?: boolean };
     if (global.__legacylensContentScriptInstalled) return;
     global.__legacylensContentScriptInstalled = true;
-    const fixtureMode = chrome.runtime.getManifest().host_permissions?.includes('http://127.0.0.1/*') === true;
 
     let session: CaptureSession | undefined;
     let nonce = '';
@@ -51,30 +50,6 @@ export default defineContentScript({
     };
     chrome.runtime.onMessage.addListener((message: unknown, _sender, respond) => {
       const msg = message as { type?: unknown; projectId?: unknown; session?: unknown; origin?: unknown; traceId?: unknown };
-      if (fixtureMode && msg?.type === 'fixture.capture.start' && typeof msg.projectId === 'string') {
-        console.info('LegacyLens fixture capture: page command received');
-        void ask<{ ok: boolean; session: CaptureSession }>({ type: 'fixture.capture.start', projectId: msg.projectId })
-          .then((reply) => {
-            try {
-              if (!reply?.session) throw new Error('Background did not return a fixture capture session');
-              console.info('LegacyLens fixture capture: background reply received');
-              beginCapture(msg.projectId as string, reply.session, location.origin);
-              respond({ ok: true, session: reply.session });
-            } catch (error) {
-              console.error('LegacyLens fixture capture failed in content script', error);
-              respond({ error: error instanceof Error ? error.message : 'Fixture capture setup failed' });
-            }
-          }, (error: unknown) => {
-            console.error('LegacyLens fixture capture background request failed', error);
-            respond({ error: error instanceof Error ? error.message : 'Fixture capture start failed' });
-          });
-        return true;
-      }
-      if (fixtureMode && msg?.type === 'fixture.capture.stop') {
-        void ask<{ ok: boolean }>({ type: 'fixture.capture.stop' })
-          .then((reply) => { resetCapture(); respond(reply); }, (error: unknown) => respond({ error: error instanceof Error ? error.message : 'Fixture capture stop failed' }));
-        return true;
-      }
       try {
         if (msg?.type === 'capture.begin' && typeof msg.projectId === 'string' && typeof msg.origin === 'string'
           && msg.session && typeof msg.session === 'object') {

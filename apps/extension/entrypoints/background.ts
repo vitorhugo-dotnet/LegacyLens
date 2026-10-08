@@ -194,6 +194,32 @@ async function selectProject(menuId: string, tab?: chrome.tabs.Tab): Promise<voi
 }
 
 export default defineBackground(() => {
+  if (fixtureMode) {
+    (globalThis as FixtureDebugGlobal & {
+      __legacyLensFixtureCapture?: (request: { action: 'start' | 'stop'; tabId: number; projectId?: string }) => Promise<{ ok: true; session?: CaptureSession }>;
+    }).__legacyLensFixtureCapture = async ({ action, tabId, projectId }) => {
+      const tab = await chrome.tabs.get(tabId);
+      if (action === 'start') {
+        if (!projectId) throw new Error('Fixture capture needs a project ID');
+        const selected = ((await chrome.storage.session.get(selectedProjectsKey))[selectedProjectsKey] ?? {}) as Record<string, string>;
+        await chrome.storage.session.set({ [selectedProjectsKey]: { ...selected, [String(tabId)]: projectId } });
+        const session = await startCapture(tab, { requestPermission: false, projectId, notifyContent: false, injectScripts: false });
+        if (!session) throw new Error(`Fixture capture did not start (background phase: ${(globalThis as FixtureDebugGlobal).__legacylensFixturePhase ?? 'unknown'})`);
+        const origin = originOf(tab.url);
+        if (!origin) throw new Error('Fixture tab does not have an HTTP origin');
+        const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.begin', projectId, session, origin }) as { ok?: boolean; error?: string };
+        if (reply?.error || !reply?.ok) {
+          await controller.stop(tabId);
+          throw new Error(reply?.error ?? 'Content script did not acknowledge fixture capture');
+        }
+        return { ok: true, session };
+      }
+      const active = controller.get(tabId);
+      await stopCapture(tab, { notifyContent: false });
+      if (active) await chrome.tabs.sendMessage(tabId, { type: 'capture.end', traceId: active.session.id });
+      return { ok: true };
+    };
+  }
   void controller.restore();
   const initializeMenu = () => {
     void queueMenuRender().catch((error) => console.error('LegacyLens could not initialize context menu', error));
@@ -223,35 +249,8 @@ export default defineBackground(() => {
     const msg = message as Record<string, unknown>;
     const tabId = sender.tab?.id;
     const senderOrigin = originOf(sender.url);
-    if (!msg || typeof msg.type !== 'string') return;
-    const fixtureRequest = msg.type.startsWith('fixture.capture.');
-    if (fixtureRequest) setFixturePhase('fixture-request:received');
-    if (tabId === undefined || !senderOrigin) {
-      if (fixtureRequest) {
-        setFixturePhase('fixture-request:invalid-sender');
-        respond({ error: `Invalid fixture sender context (tab=${tabId ?? 'missing'}, url=${sender.url ?? 'missing'})` });
-        return false;
-      }
-      return;
-    }
+    if (tabId === undefined || !senderOrigin || !msg || typeof msg.type !== 'string') return;
     const run = async () => {
-      if (fixtureMode && msg.type === 'fixture.capture.start' && typeof msg.projectId === 'string') {
-        console.info('LegacyLens fixture capture: start command received');
-        setFixturePhase('fixture-command:received');
-        const selected = ((await chrome.storage.session.get(selectedProjectsKey))[selectedProjectsKey] ?? {}) as Record<string, string>;
-        setFixturePhase('fixture-selection:loaded');
-        await chrome.storage.session.set({ [selectedProjectsKey]: { ...selected, [String(tabId)]: msg.projectId } });
-        setFixturePhase('fixture-selection:saved');
-        const session = await startCapture(sender.tab, { requestPermission: false, projectId: msg.projectId, notifyContent: false, injectScripts: false });
-        if (!session) throw new Error('Fixture capture did not start; inspect the extension service worker log.');
-        setFixturePhase('fixture-command:complete');
-        return { ok: true, session };
-      }
-      if (fixtureMode && msg.type === 'fixture.capture.stop') {
-        await stopCapture(sender.tab, { notifyContent: false });
-        if (controller.get(tabId)) throw new Error('Fixture capture did not stop; inspect the extension service worker log.');
-        return { ok: true };
-      }
       if (msg.type === 'capture.event' && typeof msg.kind === 'string' && typeof msg.sessionId === 'string') {
         await controller.restore();
         const active = controller.get(tabId);
@@ -276,21 +275,7 @@ export default defineBackground(() => {
       }
       throw new Error('Unsupported capture message');
     };
-    const fixtureCommand = fixtureRequest;
-    if (fixtureCommand) {
-      const timer = setTimeout(() => {
-        const phase = (globalThis as FixtureDebugGlobal).__legacylensFixturePhase ?? 'unknown';
-        setFixturePhase('fixture-command:timeout');
-        respond({ error: `Fixture command timed out at ${phase}` });
-      }, 20_000);
-      void run().then((result) => { clearTimeout(timer); respond(result); }, (error: unknown) => {
-        clearTimeout(timer);
-        setFixturePhase('fixture-command:error');
-        respond({ error: error instanceof Error ? error.message : 'Fixture capture failed' });
-      });
-    } else {
-      void run().then(respond, (error: unknown) => respond({ error: error instanceof Error ? error.message : 'Capture failed' }));
-    }
+    void run().then(respond, (error: unknown) => respond({ error: error instanceof Error ? error.message : 'Capture failed' }));
     return true;
   });
 });

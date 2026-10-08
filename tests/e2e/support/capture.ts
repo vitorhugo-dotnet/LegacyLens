@@ -3,20 +3,19 @@ import type { Page, Worker } from '@playwright/test';
 interface CaptureReply { ok?: boolean; session?: { id?: string }; error?: string }
 
 async function sendFixtureCommand(worker: Worker, page: Page, message: { type: string; projectId?: string }): Promise<CaptureReply> {
-  worker.on('console', (entry) => console.log(`[extension] ${entry.text()}`));
-  try {
-    return await worker.evaluate(async ({ url, message: command }) => {
-      const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
-      if (tab?.id === undefined) throw new Error('fixture tab is unavailable');
-      return await Promise.race([
-        chrome.tabs.sendMessage(tab.id, command) as Promise<CaptureReply>,
-        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('Fixture content/background message timed out after 15s')), 15_000)),
-      ]);
-    }, { url: page.url(), message });
-  } catch (error) {
-    const phase = await worker.evaluate(() => (globalThis as typeof globalThis & { __legacylensFixturePhase?: string }).__legacylensFixturePhase ?? 'not-set');
-    throw new Error(`${error instanceof Error ? error.message : 'Fixture command failed'} (background phase: ${phase})`);
-  }
+  return await worker.evaluate(async ({ url, command }) => {
+    const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
+    if (tab?.id === undefined) throw new Error('fixture tab is unavailable');
+    const driver = (globalThis as typeof globalThis & {
+      __legacyLensFixtureCapture?: (request: { action: 'start' | 'stop'; tabId: number; projectId?: string }) => Promise<CaptureReply>;
+    }).__legacyLensFixtureCapture;
+    if (!driver) throw new Error('fixture capture driver is not available in the extension service worker');
+    return await driver({
+      action: command.type === 'fixture.capture.start' ? 'start' : 'stop',
+      tabId: tab.id,
+      ...(command.projectId ? { projectId: command.projectId } : {}),
+    });
+  }, { url: page.url(), command: message });
 }
 
 export async function startFixtureCapture(worker: Worker, page: Page, projectId: string): Promise<void> {
