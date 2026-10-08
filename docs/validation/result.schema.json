@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://legacylens.dev/schemas/validation-result-v1.json",
+  "title": "LegacyLens validation result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "collectedAt", "commit", "release", "platform", "stack", "scenarios", "collection"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "collectedAt": { "type": "string", "format": "date-time" },
+    "commit": { "type": "string", "pattern": "^(unknown|[0-9a-fA-F]{7,40})$" },
+    "release": { "type": "string", "pattern": "^(unknown|([0-9]+\\.){1,3}[0-9A-Za-z.+-]+)$" },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "architecture", "version", "build", "powershell"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "architecture": { "enum": ["x64", "x86"] },
+        "version": { "type": "string", "minLength": 1 },
+        "build": { "type": "string", "minLength": 1 },
+        "powershell": { "type": "string", "minLength": 1 }
+      }
+    },
+    "stack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["javaRuntime", "applicationServer", "faces", "primeFaces", "database", "jdbcDriver"],
+      "properties": {
+        "javaRuntime": { "type": ["string", "null"] },
+        "applicationServer": { "type": ["string", "null"] },
+        "faces": { "type": ["string", "null"] },
+        "primeFaces": { "type": ["string", "null"] },
+        "database": { "type": ["string", "null"] },
+        "jdbcDriver": { "type": ["string", "null"] }
+      }
+    },
+    "indexRevision": { "type": ["string", "null"] },
+    "deploymentRevision": { "type": ["string", "null"] },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status"],
+        "properties": {
+          "id": { "enum": ["install", "uninstall", "intellij-integration", "interaction-without-request", "complete-capture", "static-impact"] },
+          "status": { "enum": ["passed", "failed", "not-run"] },
+          "evidenceRef": { "type": "string", "maxLength": 160 }
+        }
+      }
+    },
+    "collection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceFilesIncluded", "logsIncluded", "tracesIncluded", "environmentVariablesIncluded", "credentialsIncluded"],
+      "properties": {
+        "sourceFilesIncluded": { "const": false },
+        "logsIncluded": { "const": false },
+        "tracesIncluded": { "const": false },
+        "environmentVariablesIncluded": { "const": false },
+        "credentialsIncluded": { "const": false }
+      }
+    }
+  }
+}
