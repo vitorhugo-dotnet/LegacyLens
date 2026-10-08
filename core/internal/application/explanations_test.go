@@ -119,7 +119,7 @@ func TestExplanationRejectsNullProviderCollections(t *testing.T) {
 }
 
 func TestUnknownEvidenceRejectedFromProviderClaims(t *testing.T) {
-	provider := &explanationTestProvider{result: ExplanationResult{Claims: []ExplanationClaim{{Text: "Unsupported statement.", EvidenceIDs: []domain.ID{"not-in-preview"}, Confidence: "supported"}}}}
+	provider := &explanationTestProvider{result: ExplanationResult{Claims: []ExplanationClaim{{Text: "Unsupported statement.", EvidenceIDs: []domain.ID{"not-in-preview"}, Confidence: "supported"}}, Limitations: []string{}}}
 	service := NewExplanationService(NewInvestigationService(investigationStore{explanationFixture()}), provider)
 	preview, err := service.Preview(context.Background(), ExplanationRequest{ProjectID: "p1", TraceID: explanationFixture().Trace.ID, Question: "Explain this", EvidenceIDs: []domain.ID{"e1"}})
 	if err != nil {
