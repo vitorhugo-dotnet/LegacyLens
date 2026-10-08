@@ -66,6 +66,18 @@ test('captures a Jakarta Faces action and reports exact runtime capabilities', a
       const stages = (await captureDiagnostics(worker)).filter((record) => record.traceId === traceId);
       throw new Error(`${error instanceof Error ? error.message : 'modern event missing'}; fixture stages=${JSON.stringify(stages)}`);
     }
+    const selectedClick = (await captureDiagnostics(worker)).find((record) =>
+      record.traceId === traceId && record.stage === 'content.selection' && record.outcome === 'accepted' && record.eventId);
+    expect(selectedClick, `click selection missing; stages=${JSON.stringify(await captureDiagnostics(worker))}`).toBeDefined();
+    try {
+      await expect.poll(async () => (await captureDiagnostics(worker)).some((record) =>
+        record.traceId === traceId && record.eventId === selectedClick!.eventId && record.stage === 'content.send' && record.outcome !== 'started'),
+      { timeout: 40_000, message: 'content capture send must finish with an acknowledgement or typed failure' }).toBe(true);
+    } catch (error) {
+      const stages = (await captureDiagnostics(worker)).filter((record) => record.traceId === traceId && record.eventId === selectedClick!.eventId);
+      throw new Error(`${error instanceof Error ? error.message : 'content send did not finish'}; click stages=${JSON.stringify(stages)}`);
+    }
+    result = await command('investigation.get', { projectId: state.projectId, traceId, offset: 0, limit: 200 });
     const events = result!.events.items;
     console.log(`compatibility-baseline ${JSON.stringify({ id: 'jakarta-java21-wildfly35', captureMs: Date.now() - captureStartedAt, eventCount: result!.events.items.length, methodEventCount: events.filter((event) => event.kind === 'method.start').length, staticRelationCount: result!.relations.items.filter((relation) => relation.layer === 'static').length })}`);
     const click = events.find((event) => event.kind === 'jsf.click' && /^[a-f0-9]{16}$/i.test(event.eventId));
