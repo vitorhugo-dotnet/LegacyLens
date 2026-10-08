@@ -79,12 +79,14 @@ export default defineContentScript({
           reject(new Error('Capture storage transport timed out'));
         }, message.type === 'capture.ready' ? 5_000 : 35_000);
         storageReplies.set(requestId, (reply) => { globalThis.clearTimeout(timer); resolve(reply); });
-        void chrome.storage.local.set({ [captureStorageKey(requestId)]: { requestId, tabId, origin: location.origin, message } })
-          .catch((error: unknown) => {
-            globalThis.clearTimeout(timer);
-            storageReplies.delete(requestId);
-            reject(error instanceof Error ? error : new Error('Could not queue capture request'));
-          });
+        chrome.storage.local.set({ [captureStorageKey(requestId)]: { requestId, tabId, origin: location.origin, message } }, () => {
+          const error = chrome.runtime.lastError;
+          if (!error) return;
+          globalThis.clearTimeout(timer);
+          storageReplies.delete(requestId);
+          if (fixtureDiagnostics) console.warn('LegacyLens fixture capture outbox write failed', error.message);
+          reject(new Error(error.message));
+        });
       }));
       try { await capturePort.start(nextSession.id); }
       catch (error) { resetCapture(); throw error; }

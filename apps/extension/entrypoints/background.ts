@@ -28,6 +28,7 @@ type FixtureDebugGlobal = typeof globalThis & {
   __legacylensFixtureRuntimeMessageRegistered?: boolean;
   __legacylensFixtureRuntimeMessageCount?: number;
   __legacylensFixtureStorageRequestCount?: number;
+  __legacylensFixtureStorageChangeCount?: number;
   __legacyLensCaptureDiagnostics?: ReturnType<typeof fixtureDiagnosticRecords>;
 };
 function fixtureDiagnosticRecords() { return [] as Array<import('../src/capture/diagnostics.ts').CaptureStageRecord>; }
@@ -277,9 +278,14 @@ export default defineBackground(() => {
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'local') return;
     for (const [key, change] of Object.entries(changes)) {
-      if (key.startsWith(CAPTURE_TRANSPORT_STORAGE_PREFIX) && change.newValue !== undefined) {
-        void processStorageRequest(key, change.newValue).catch((error) => console.warn('LegacyLens capture outbox processing failed', error));
+      if (!key.startsWith(CAPTURE_TRANSPORT_STORAGE_PREFIX)) continue;
+      if (fixtureMode) {
+        const debug = globalThis as FixtureDebugGlobal;
+        debug.__legacylensFixtureStorageChangeCount = (debug.__legacylensFixtureStorageChangeCount ?? 0) + 1;
+        setFixturePhase('storage:change');
       }
+      if (change.newValue !== undefined) void processStorageRequest(key, change.newValue)
+        .catch((error) => console.warn('LegacyLens capture outbox processing failed', error));
     }
   });
   void chrome.storage.local.get(null).then((stored) => {
@@ -342,7 +348,8 @@ export default defineBackground(() => {
           const messageListener = debug.__legacylensFixtureRuntimeMessageRegistered === true;
           const messages = debug.__legacylensFixtureRuntimeMessageCount ?? 0;
           const storageRequests = debug.__legacylensFixtureStorageRequestCount ?? 0;
-          throw new Error(`${reply?.error ?? 'Content script did not acknowledge fixture capture'} (phase: ${phase}; onConnect registered: ${listener}; calls: ${connections}; onMessage registered: ${messageListener}; calls: ${messages}; storage requests: ${storageRequests})`);
+          const storageChanges = debug.__legacylensFixtureStorageChangeCount ?? 0;
+          throw new Error(`${reply?.error ?? 'Content script did not acknowledge fixture capture'} (phase: ${phase}; onConnect registered: ${listener}; calls: ${connections}; onMessage registered: ${messageListener}; calls: ${messages}; storage changes: ${storageChanges}; valid storage requests: ${storageRequests})`);
         }
         return { ok: true, session };
       }
