@@ -24,6 +24,8 @@ type FixtureDebugGlobal = typeof globalThis & {
   __legacylensFixturePhase?: string;
   __legacylensFixtureRuntimeConnectRegistered?: boolean;
   __legacylensFixtureRuntimeConnectCount?: number;
+  __legacylensFixtureRuntimeMessageRegistered?: boolean;
+  __legacylensFixtureRuntimeMessageCount?: number;
   __legacyLensCaptureDiagnostics?: ReturnType<typeof fixtureDiagnosticRecords>;
 };
 function fixtureDiagnosticRecords() { return [] as Array<import('../src/capture/diagnostics.ts').CaptureStageRecord>; }
@@ -253,8 +255,17 @@ export default defineBackground(() => {
   if (fixtureMode) (globalThis as FixtureDebugGlobal).__legacylensFixtureRuntimeConnectRegistered = true;
   chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
     const msg = message as { type?: unknown } | null;
+    if (fixtureMode) {
+      const debug = globalThis as FixtureDebugGlobal;
+      debug.__legacylensFixtureRuntimeMessageCount = (debug.__legacylensFixtureRuntimeMessageCount ?? 0) + 1;
+      setFixturePhase(`message:${String(msg?.type ?? 'unknown')}`);
+      console.info(`LegacyLens fixture message received: ${String(msg?.type ?? 'unknown')}`);
+    }
     if (msg?.type === 'capture.ready') {
-      void handleCaptureHandshake(message, sender as CaptureMessageSender, controller).then(respond, () => respond({ ready: false, error: 'Capture handshake failed', code: 'INTERNAL' }));
+      void handleCaptureHandshake(message, sender as CaptureMessageSender, controller).then((reply) => {
+        if (fixtureMode) setFixturePhase(`message:capture.ready:${reply.ready ? 'accepted' : 'rejected'}`);
+        respond(reply);
+      }, () => respond({ ready: false, error: 'Capture handshake failed', code: 'INTERNAL' }));
       return true;
     }
     if (msg?.type === 'capture.event') {
@@ -264,6 +275,7 @@ export default defineBackground(() => {
     }
     return false;
   });
+  if (fixtureMode) (globalThis as FixtureDebugGlobal).__legacylensFixtureRuntimeMessageRegistered = true;
   if (fixtureMode) {
     globalThis.addEventListener('error', (event) => setFixturePhase(`uncaught:${event.message.slice(0, 120)}`));
     globalThis.addEventListener('unhandledrejection', () => setFixturePhase('unhandled-rejection'));
@@ -288,7 +300,9 @@ export default defineBackground(() => {
           const phase = debug.__legacylensFixturePhase ?? 'unknown';
           const listener = debug.__legacylensFixtureRuntimeConnectRegistered === true;
           const connections = debug.__legacylensFixtureRuntimeConnectCount ?? 0;
-          throw new Error(`${reply?.error ?? 'Content script did not acknowledge fixture capture'} (phase: ${phase}; onConnect registered: ${listener}; calls: ${connections})`);
+          const messageListener = debug.__legacylensFixtureRuntimeMessageRegistered === true;
+          const messages = debug.__legacylensFixtureRuntimeMessageCount ?? 0;
+          throw new Error(`${reply?.error ?? 'Content script did not acknowledge fixture capture'} (phase: ${phase}; onConnect registered: ${listener}; calls: ${connections}; onMessage registered: ${messageListener}; calls: ${messages})`);
         }
         return { ok: true, session };
       }

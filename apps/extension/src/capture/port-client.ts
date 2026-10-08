@@ -213,7 +213,8 @@ export class CapturePortClient {
     if (!this.messageFallback || !this.traceId || this.closed) { this.reconnect(); return; }
     const traceId = this.traceId;
     try {
-      const response = await this.messageFallback({ type: 'capture.ready', sessionId: traceId }) as { ready?: unknown; sessionId?: unknown } | undefined;
+      const response = await this.requestMessageFallback({ type: 'capture.ready', sessionId: traceId }, CAPTURE_PORT_HANDSHAKE_TIMEOUT_MS) as
+        { ready?: unknown; sessionId?: unknown } | undefined;
       if (response?.ready !== true || response.sessionId !== traceId) { this.reconnect(); return; }
       this.disconnect();
       this.mode = 'message';
@@ -228,6 +229,21 @@ export class CapturePortClient {
     } catch {
       this.diagnostics('message.handshake-failed', undefined, 'MESSAGE_FAILED');
       this.reconnect();
+    }
+  }
+
+  private async requestMessageFallback(message: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
+    if (!this.messageFallback) throw new Error('Capture message fallback is unavailable');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.messageFallback(message),
+        new Promise<never>((_resolve, reject) => {
+          timer = this.timers.setTimeout(() => reject(new Error('Capture message fallback timed out')), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) this.timers.clearTimeout(timer);
     }
   }
 

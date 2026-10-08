@@ -170,4 +170,25 @@ describe('CapturePortClient', () => {
     await client.stop();
     vi.useRealTimers();
   });
+
+  it('bounds an unresponsive fallback handshake and eventually rejects capture startup', async () => {
+    vi.useFakeTimers();
+    const ports = [fakePort(), fakePort(), fakePort(), fakePort()];
+    let index = 0;
+    const fallback = vi.fn(() => new Promise<never>(() => {}));
+    const client = new CapturePortClient(() => ports[index++]!.port, () => {}, undefined, fallback);
+    const started = client.start(traceId);
+    const rejection = expect(started).rejects.toThrow('reconnect limit exhausted');
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(5_000);
+      if (attempt < 3) {
+        await vi.advanceTimersByTimeAsync([250, 1_000, 2_000][attempt]!);
+      }
+    }
+    await rejection;
+    expect(fallback).toHaveBeenCalledTimes(4);
+    await client.stop();
+    vi.useRealTimers();
+  });
 });
