@@ -33,6 +33,7 @@ export function handleCapturePort(port: chrome.runtime.Port, controller: Capture
       }
       if (message.type === 'hello') {
         traceId = message.traceId;
+        diagnostics({ stage: 'background.port', outcome: 'started', ...correlation() });
         const validTab = Number.isSafeInteger(tabId) && (tabId as number) >= 0;
         if (ready || !validTab || !originOf(sender?.url) && !originOf(sender?.tab?.url)) { nack(!validTab ? 'SENDER_TAB' : 'SENDER_URL'); return; }
         try { await controller.restore(); } catch { nack('SESSION_UNAVAILABLE'); return; }
@@ -41,7 +42,6 @@ export function handleCapturePort(port: chrome.runtime.Port, controller: Capture
         if (!active || active.session.id !== message.traceId || Date.parse(active.session.expiresAt) <= Date.now()) { nack('SESSION_MISMATCH'); return; }
         if (!senderOrigin || active.request.origin !== senderOrigin) { nack('ORIGIN_MISMATCH'); return; }
         ready = true;
-        diagnostics({ stage: 'background.port', outcome: 'started', ...correlation() });
         diagnostics({ stage: 'background.port', outcome: 'accepted', ...correlation() });
         post({ type: 'ready', version: CAPTURE_PORT_VERSION, traceId });
         return;

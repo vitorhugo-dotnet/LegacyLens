@@ -278,6 +278,7 @@ export default defineBackground(() => {
   });
 
   chrome.runtime.onConnect.addListener((port) => {
+    if (fixtureMode) setFixturePhase(`port.connect:${port.name}`);
     if (port.name !== CAPTURE_PORT_NAME) {
       try { port.disconnect(); } catch { /* port already closed */ }
       return;

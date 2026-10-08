@@ -1,4 +1,4 @@
-import { CAPTURE_PORT_NAME, CAPTURE_PORT_RECONNECT_DELAYS_MS, CAPTURE_PORT_VERSION, MAX_PENDING_CAPTURE_EVENTS,
+import { CAPTURE_PORT_HANDSHAKE_TIMEOUT_MS, CAPTURE_PORT_NAME, CAPTURE_PORT_RECONNECT_DELAYS_MS, CAPTURE_PORT_VERSION, MAX_PENDING_CAPTURE_EVENTS,
   parseCapturePortServerMessage, type CapturePortClientMessage, type CapturePortServerMessage } from './port-protocol.ts';
 
 export interface CapturePortEvent {
@@ -110,7 +110,7 @@ export class CapturePortClient {
       if (!this.traceId) throw new Error('Capture trace is missing');
       this.safePost({ type: 'hello', version: CAPTURE_PORT_VERSION, traceId: this.traceId });
       this.diagnostics('port.connect');
-      this.ackTimer = this.timers.setTimeout(() => { this.diagnostics('port.handshake-timeout', undefined, 'TIMEOUT'); this.reconnect(); }, 35_000);
+      this.ackTimer = this.timers.setTimeout(() => { this.diagnostics('port.handshake-timeout', undefined, 'TIMEOUT'); this.reconnect(); }, CAPTURE_PORT_HANDSHAKE_TIMEOUT_MS);
     } catch {
       this.connecting = false;
       this.port = undefined;

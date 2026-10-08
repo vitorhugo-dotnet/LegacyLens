@@ -1,5 +1,6 @@
 export const CAPTURE_PORT_NAME = 'legacylens.capture.v1';
 export const CAPTURE_PORT_VERSION = 1 as const;
+export const CAPTURE_PORT_HANDSHAKE_TIMEOUT_MS = 5_000;
 export const MAX_PENDING_CAPTURE_EVENTS = 100;
 export const CAPTURE_PORT_RECONNECT_DELAYS_MS = [250, 1_000, 2_000] as const;
 

@@ -113,4 +113,19 @@ describe('CapturePortClient', () => {
     await client.stop();
     vi.useRealTimers();
   });
+
+  it('reopens when the connection handshake gets no ready response', async () => {
+    vi.useFakeTimers();
+    const ports = [fakePort(), fakePort()];
+    let index = 0;
+    const client = new CapturePortClient(() => ports[index++]!.port);
+    const started = client.start(traceId);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(index).toBe(2);
+    ports[1]!.emit(ready);
+    await expect(started).resolves.toBeUndefined();
+    await client.stop();
+    vi.useRealTimers();
+  });
 });
