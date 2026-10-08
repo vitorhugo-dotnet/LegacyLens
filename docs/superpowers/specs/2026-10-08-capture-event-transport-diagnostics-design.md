@@ -2,7 +2,7 @@
 
 ## Estado
 
-Spec de arquitetura para localizar a perda do evento `jsf.click` e documentar seu redesenho. A instrumentação localizou no CI a ausência de confirmação entre content script e background. Os E2E também mostraram que `runtime.Port` não entrega `onConnect` no ambiente Windows do projeto. O transporte mantém Port como tentativa primária e agora implementa fallback confirmado por `runtime.sendMessage`, compartilhando validação, ACK após persistência e identidade estável. Aguarda validação E2E desse fallback no CI Windows.
+Spec de arquitetura para localizar a perda do evento `jsf.click` e documentar seu redesenho. A instrumentação localizou no CI a ausência de confirmação entre content script e background. Os E2E também mostraram que `runtime.Port` não entrega `onConnect` e que `runtime.sendMessage` não chega a `onMessage` no ambiente Windows do projeto. A implementação mantém Port como tentativa primária e usa uma caixa de saída correlacionada em `chrome.storage.local` como fallback, com confirmação do background por `tabs.sendMessage`. O background confere a aba e a origem atuais e reutiliza as validações existentes antes de aceitar a sessão/evento. Aguarda validação E2E desse novo transporte no CI Windows.
 
 ## Objetivo
 
@@ -20,7 +20,7 @@ O fluxo atual para o clique é:
 DOM click
   → chooseElement() no content script
   → dispatch de legacylens:select para o mundo principal
-  → chrome.runtime.sendMessage({ type: capture.event, kind: jsf.click, ... })
+  → Port `legacylens.capture.v1`; após timeout, envelope em `chrome.storage.local`
   → listener do background valida aba, origem, sessão e payload
   → CaptureController.record()
   → NativeClient.request('trace.ingest', ...)
@@ -50,6 +50,7 @@ Os resultados abaixo vêm dos traces e jobs de GitHub Actions. Em todas as execu
 | `7a9f0bb` | [37826551410](https://github.com/vitorhugo-dotnet/LegacyLens/actions/runs/37826551410) | Repetir com o ID explícito e listener já registrado também reportou `onConnect registered: true; calls: 0`. Os checks requeridos passaram; os dois E2E falharam. |
 | `8629b3a` | [37827755731](https://github.com/vitorhugo-dotnet/LegacyLens/actions/runs/37827755731) | O Port expirou e a promessa `runtime.sendMessage(capture.ready)` também ficou pendente; o E2E legado excedeu 180 s. Os checks requeridos passaram. O cliente agora limita esse segundo handshake para produzir diagnóstico útil em vez de deixar `capture.begin` preso. |
 | `838af40` | [37828772614](https://github.com/vitorhugo-dotnet/LegacyLens/actions/runs/37828772614) | Com timeout independente, os dois E2E encerraram sem exceder 180 s. O erro reportou `onConnect registered: true; calls: 0; onMessage registered: true; calls: 0`: nenhum dos dois listeners recebeu a chamada originada no content script. Checks requeridos passaram. |
+| `47cba3f` | [37829466099](https://github.com/vitorhugo-dotnet/LegacyLens/actions/runs/37829466099) | A sobrecarga padrão do Port e o callback de `runtime.sendMessage` repetiram o resultado no E2E Jakarta: listeners registrados, `onConnect calls: 0` e `onMessage calls: 0`. Os checks requeridos passaram; os dois E2E falharam. Isso descartou diferenças entre as sobrecargas de conexão/resposta e motivou o fallback por storage. |
 
 As falhas de `2c26536` e `e87e04c` mostravam que a seleção chega ao evento `legacylens:select`, mas não localizavam a perda. O run `1381b09` acrescentou a evidência correlacionada: o helper do content iniciou `chrome.runtime.sendMessage`, não recebeu ACK nem NACK e expirou após 35.002 ms; o background não registrou recebimento para o mesmo trace/evento. A falha fica localizada na fronteira one-shot content→background (entrega ou ciclo de vida da resposta), antes da validação e do host. O evento não apareceu em `investigation.get`.
 
@@ -72,7 +73,7 @@ As tentativas anteriores reduziram o problema até depois da seleção do DOM. A
 ## Abordagens consideradas
 
 1. **Instrumentar o transporte one-shot atual (concluída).** Os registros correlacionados provaram que o content script inicia `sendMessage`, mas não recebe resposta em 35 segundos e o background não registra recebimento.
-2. **Port primário com fallback confirmado por mensagem (em implementação).** O content tenta `chrome.runtime.Port` e espera `ready` por 5 s. Se o receiver não confirmar, o cliente negocia a sessão por `capture.ready` via `runtime.sendMessage` e envia eventos por essa rota. Ambas as rotas passam pelas mesmas validações do background e só confirmam depois de `trace.ingest`. A fila FIFO limitada, IDs estáveis e até três retries preservam ordem e tornam seguro reenviar após ACK perdido, usando a deduplicação do core.
+2. **Port primário com fallback por caixa de saída em storage (implementado, E2E pendente).** O content tenta `chrome.runtime.Port` e espera `ready` por 5 s. Se não houver confirmação, grava um envelope pequeno e correlacionado em `chrome.storage.local`. O background consome a mudança, confere `tabId` e origem contra `chrome.tabs.get`, reutiliza os validadores de sessão/evento e devolve a resposta via `chrome.tabs.sendMessage`. O content mantém pendências com timeout; eventos repetidos preservam o mesmo `eventId`, e a fila FIFO limitada/retries continuam usando a deduplicação do core. O startup também procura envelopes não consumidos para cobrir reinício do service worker.
 3. **Mover captura/encaminhamento para mais código de página.** Não selecionada: o mundo principal não dispõe das APIs `chrome.runtime`; ainda precisaria de uma ponte de eventos para o content script e aumentaria a superfície de mensagens não confiáveis. Não remove as fronteiras que precisam ser diagnosticadas.
 
 ## Fase 1: instrumentação do transporte atual
@@ -83,7 +84,7 @@ Usar `traceId`, `tabId` e o `eventId` já criado para o clique como correlação
 
 ### Fronteiras a observar
 
-1. **Content script, seleção:** confirmar criação do evento e valores de correlação antes da chamada a `chrome.runtime.sendMessage`.
+1. **Content script, seleção:** confirmar criação do evento e valores de correlação antes de enviar pelo Port ou gravar o envelope de fallback.
 2. **Content → background:** registrar início do envio e resultado recebido. Diferenciar resposta válida com `accepted: true`, resposta `undefined`/sem listener, NACK explícito, rejeição da promessa e timeout. Não tratar resposta ausente como sucesso nem descartar silenciosamente erro em `capture.event`.
 3. **Entrada do background:** registrar recebimento de `capture.event`, existência do `sender.tab.id`, URL/origem efetivamente usada, comparação com a origem da sessão e validação de `sessionId`, `eventId`, tipo e metadata. Registrar também cada saída antecipada do listener com um código seguro e uma resposta explícita quando for seguro responder. O registro não deve expor o payload completo.
 4. **Background → host:** registrar início e fim de `CaptureController.record`/`trace.ingest`, duração, resultado ou código de erro. Distinguir mensagem inválida, sessão inexistente, Native Messaging indisponível, timeout e rejeição do core.
@@ -102,16 +103,16 @@ O run `1381b09` classificou a primeira falha na fronteira de entrega/resposta co
 
 O evento não chegou à validação do background, ao host ou à consulta. A resposta one-shot não foi confiável neste caminho; o redesenho com Port foi planejado separadamente.
 
-## Fase 2: redesenho condicional com `Port`
+## Fase 2: redesenho com `Port` e caixa de saída em storage
 
 O gatilho foi atendido pelo run `1381b09`. O usuário aprovou a execução direta do plano `docs/superpowers/plans/2026-10-08-capture-port-reliability.md`; a implementação local está concluída e espera a validação dos E2E no CI Windows.
 
 ### Protocolo proposto
 
 - O content script tenta abrir `chrome.runtime.connect({ name: 'legacylens.capture.v1' })` quando a captura é armada e espera `ready` por 5 s.
-- Se o Port não obtiver `ready`, o content negocia a mesma sessão por `chrome.runtime.sendMessage({ type: 'capture.ready', sessionId })`. O background valida remetente, aba, origem, expiração e sessão ativa antes de responder.
+- Se o Port não obtiver `ready`, o content grava `capture.ready` na caixa de saída de `chrome.storage.local`. O background verifica a aba real, URL/origem, expiração e sessão ativa antes de responder por `chrome.tabs.sendMessage`.
 - O content script envia envelopes tipados com versão, `traceId`, `eventId`, tipo de evento e metadata limitada. O controller mantém a sequência do produtor no host e preserva o `eventId` durante replay.
-- O background valida cada envelope nas duas rotas pelo mesmo `CaptureController` e pelas mesmas validações. Só responde `ack` depois que o host confirmou `trace.ingest`; erros retornam códigos seguros e correlação.
+- O background valida eventos do Port e da caixa de saída pelas mesmas funções. Só responde `ack` depois que o host confirmou `trace.ingest`; erros retornam códigos seguros e correlação. A fila de storage é pequena, contém somente envelopes de captura já filtrados, é removida após o processamento e é recuperada na inicialização do service worker.
 - Após queda do port, o content script pode reconectar e reenviar eventos pendentes com os mesmos IDs. O background/core deve garantir idempotência ou detectar duplicatas antes de ativar retransmissão.
 - Ao encerrar a captura, o content script drena ACKs por até 35 segundos e informa se restaram eventos; o background marca a lacuna e encerra a sessão. Fechamento de aba e navegação de documento fecham os Ports, marcam a captura incompleta e encerram a sessão sem abrir investigação. Após restart do service worker, o content script reconecta e reproduz eventos pendentes com os mesmos IDs.
 
@@ -155,4 +156,4 @@ O gatilho foi atendido pelo run `1381b09`. O usuário aprovou a execução diret
 
 ## Estado de validação da Fase 2
 
-O plano implementou fila FIFO de até 100 eventos, replay com o mesmo `eventId`, ACK após aceite do host, deduplicação do core e limpeza no stop/fechamento/navegação. Os runs `37823952379`, `37825808433`, `37826551410` e `37828772614` mostram que a chamada do content não chega a `onConnect`. O fallback inicial ficou pendente (`37827755731`); após limitá-lo, `37828772614` mostrou que também não chega a `onMessage`. A próxima tentativa usa a sobrecarga interna padrão de `runtime.connect({ name })` e o callback de `runtime.sendMessage`, que expõe `runtime.lastError`, para distinguir comportamento da API Promise de um bloqueio mais amplo de comunicação. Testes locais passam; os E2E Windows precisam confirmar esse ajuste.
+O plano implementou fila FIFO de até 100 eventos, replay com o mesmo `eventId`, ACK após aceite do host, deduplicação do core e limpeza no stop/fechamento/navegação. Os runs `37823952379`, `37825808433`, `37826551410` e `37828772614` mostram que a chamada do content não chega a `onConnect`; `37828772614` também mostra zero chamadas a `onMessage`. O run `37829466099` repetiu ambos os zeros usando as sobrecargas padrão e callback. A implementação atual preserva o Port como tentativa primária e usa a caixa de saída storage para o fallback. O parser do envelope tem testes unitários, e a suíte da extensão (118 testes), typecheck e build fixture passaram localmente. O próximo gate é observar se a mudança `storage.onChanged` chega ao service worker e se `tabs.sendMessage` confirma o evento nos dois E2E Windows.

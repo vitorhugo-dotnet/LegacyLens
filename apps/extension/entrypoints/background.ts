@@ -3,9 +3,10 @@ import type { CaptureSession, ProjectListResult } from '@legacylens/contracts/sr
 import { NativeClient } from '../src/native/client.ts';
 import { CaptureController, type ActiveCapture } from '../src/capture/session.ts';
 import { handleCapturePort } from '../src/capture/background-port.ts';
-import { handleCaptureEvent, handleCaptureHandshake, type CaptureMessageSender } from '../src/capture/background-messages.ts';
+import { handleCaptureEvent, handleCaptureHandshake } from '../src/capture/background-messages.ts';
 import { CAPTURE_PORT_NAME } from '../src/capture/port-protocol.ts';
 import { recordCaptureStage } from '../src/capture/diagnostics.ts';
+import { CAPTURE_TRANSPORT_STORAGE_PREFIX, parseCaptureStorageRequest } from '../src/capture/storage-transport.ts';
 
 const client = new NativeClient();
 const stateKey = 'legacylens.activeCaptures.v1';
@@ -26,6 +27,7 @@ type FixtureDebugGlobal = typeof globalThis & {
   __legacylensFixtureRuntimeConnectCount?: number;
   __legacylensFixtureRuntimeMessageRegistered?: boolean;
   __legacylensFixtureRuntimeMessageCount?: number;
+  __legacylensFixtureStorageRequestCount?: number;
   __legacyLensCaptureDiagnostics?: ReturnType<typeof fixtureDiagnosticRecords>;
 };
 function fixtureDiagnosticRecords() { return [] as Array<import('../src/capture/diagnostics.ts').CaptureStageRecord>; }
@@ -228,6 +230,65 @@ async function selectProject(menuId: string, tab?: chrome.tabs.Tab): Promise<voi
 
 export default defineBackground(() => {
   // Capture transport is critical; register it before menu APIs that can fail independently.
+  const processingStorageRequests = new Map<string, Promise<void>>();
+  const processStorageRequest = (key: string, value: unknown): Promise<void> => {
+    const existing = processingStorageRequests.get(key);
+    if (existing) return existing;
+    const processing = (async () => {
+      const request = parseCaptureStorageRequest(key, value);
+      if (!request) {
+        await chrome.storage.local.remove(key);
+        return;
+      }
+      if (fixtureMode) {
+        const debug = globalThis as FixtureDebugGlobal;
+        debug.__legacylensFixtureStorageRequestCount = (debug.__legacylensFixtureStorageRequestCount ?? 0) + 1;
+        setFixturePhase(`storage:${String(request.message.type ?? 'unknown')}`);
+      }
+      let reply: unknown;
+      try {
+        const tab = await chrome.tabs.get(request.tabId);
+        const actualOrigin = originOf(tab.url);
+        if (!tab.url || !actualOrigin || actualOrigin !== request.origin) {
+          reply = { ready: false, error: 'Capture tab origin changed', code: 'ORIGIN_MISMATCH' };
+        } else {
+          const verifiedSender = { url: tab.url, tab: { id: tab.id, url: tab.url } };
+          if (request.message.type === 'capture.ready') {
+            reply = await handleCaptureHandshake(request.message, verifiedSender, controller);
+          } else if (request.message.type === 'capture.event') {
+            reply = await handleCaptureEvent(request.message, verifiedSender, controller, recordDiagnostic);
+          } else {
+            reply = { error: 'Capture request type is invalid', code: 'EVENT_INVALID' };
+          }
+        }
+      } catch (error) {
+        reply = { error: error instanceof Error ? error.message : 'Capture request could not be processed', code: 'TRANSPORT_FAILED' };
+      }
+      await chrome.storage.local.remove(key);
+      try {
+        await chrome.tabs.sendMessage(request.tabId, { type: 'capture.transport.reply', requestId: request.requestId, reply });
+      } catch {
+        // The tab can close or navigate after the host accepted an event. The stable event ID makes retry safe.
+      }
+    })().finally(() => processingStorageRequests.delete(key));
+    processingStorageRequests.set(key, processing);
+    return processing;
+  };
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local') return;
+    for (const [key, change] of Object.entries(changes)) {
+      if (key.startsWith(CAPTURE_TRANSPORT_STORAGE_PREFIX) && change.newValue !== undefined) {
+        void processStorageRequest(key, change.newValue).catch((error) => console.warn('LegacyLens capture outbox processing failed', error));
+      }
+    }
+  });
+  void chrome.storage.local.get(null).then((stored) => {
+    for (const [key, value] of Object.entries(stored)) {
+      if (key.startsWith(CAPTURE_TRANSPORT_STORAGE_PREFIX)) {
+        void processStorageRequest(key, value).catch((error) => console.warn('LegacyLens capture outbox recovery failed', error));
+      }
+    }
+  }).catch((error) => console.warn('LegacyLens could not recover capture outbox', error));
   chrome.runtime.onConnect.addListener((port) => {
     if (fixtureMode) {
       const debug = globalThis as FixtureDebugGlobal;
@@ -253,29 +314,7 @@ export default defineBackground(() => {
     }
   });
   if (fixtureMode) (globalThis as FixtureDebugGlobal).__legacylensFixtureRuntimeConnectRegistered = true;
-  chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
-    const msg = message as { type?: unknown } | null;
-    if (fixtureMode) {
-      const debug = globalThis as FixtureDebugGlobal;
-      debug.__legacylensFixtureRuntimeMessageCount = (debug.__legacylensFixtureRuntimeMessageCount ?? 0) + 1;
-      setFixturePhase(`message:${String(msg?.type ?? 'unknown')}`);
-      console.info(`LegacyLens fixture message received: ${String(msg?.type ?? 'unknown')}`);
-    }
-    if (msg?.type === 'capture.ready') {
-      void handleCaptureHandshake(message, sender as CaptureMessageSender, controller).then((reply) => {
-        if (fixtureMode) setFixturePhase(`message:capture.ready:${reply.ready ? 'accepted' : 'rejected'}`);
-        respond(reply);
-      }, () => respond({ ready: false, error: 'Capture handshake failed', code: 'INTERNAL' }));
-      return true;
-    }
-    if (msg?.type === 'capture.event') {
-      void handleCaptureEvent(message, sender as CaptureMessageSender, controller, recordDiagnostic)
-        .then((reply) => { if (reply) respond(reply); }, () => respond({ error: 'Capture event failed', code: 'INTERNAL' }));
-      return true;
-    }
-    return false;
-  });
-  if (fixtureMode) (globalThis as FixtureDebugGlobal).__legacylensFixtureRuntimeMessageRegistered = true;
+  if (fixtureMode) (globalThis as FixtureDebugGlobal).__legacylensFixtureRuntimeMessageRegistered = false;
   if (fixtureMode) {
     globalThis.addEventListener('error', (event) => setFixturePhase(`uncaught:${event.message.slice(0, 120)}`));
     globalThis.addEventListener('unhandledrejection', () => setFixturePhase('unhandled-rejection'));
@@ -302,7 +341,8 @@ export default defineBackground(() => {
           const connections = debug.__legacylensFixtureRuntimeConnectCount ?? 0;
           const messageListener = debug.__legacylensFixtureRuntimeMessageRegistered === true;
           const messages = debug.__legacylensFixtureRuntimeMessageCount ?? 0;
-          throw new Error(`${reply?.error ?? 'Content script did not acknowledge fixture capture'} (phase: ${phase}; onConnect registered: ${listener}; calls: ${connections}; onMessage registered: ${messageListener}; calls: ${messages})`);
+          const storageRequests = debug.__legacylensFixtureStorageRequestCount ?? 0;
+          throw new Error(`${reply?.error ?? 'Content script did not acknowledge fixture capture'} (phase: ${phase}; onConnect registered: ${listener}; calls: ${connections}; onMessage registered: ${messageListener}; calls: ${messages}; storage requests: ${storageRequests})`);
         }
         return { ok: true, session };
       }

@@ -4,6 +4,7 @@ import { chooseElement } from '../src/capture/selection.ts';
 import { toStackMetadata } from '../src/capture/stack.ts';
 import { recordCaptureStage } from '../src/capture/diagnostics.ts';
 import { CapturePortClient } from '../src/capture/port-client.ts';
+import { captureStorageKey } from '../src/capture/storage-transport.ts';
 
 export default defineContentScript({
   matches: ['http://*/*', 'https://*/*'],
@@ -29,6 +30,7 @@ export default defineContentScript({
 
     let session: CaptureSession | undefined;
     let capturePort: CapturePortClient | undefined;
+    const storageReplies = new Map<string, (reply: unknown) => void>();
     let captureTabId = -1;
     let nonce = '';
     let selectedSource = '';
@@ -70,11 +72,19 @@ export default defineContentScript({
         recordContentStage({ stage: 'content.port', outcome, traceId: nextSession.id, tabId,
           ...(eventId ? { eventId } : {}), ...(code ? { code } : {}) });
       }, undefined, (message) => new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage(message, (reply) => {
-          const error = chrome.runtime.lastError;
-          if (error) reject(new Error(error.message));
-          else resolve(reply);
-        });
+        let requestId = '';
+        do { requestId = [...crypto.getRandomValues(new Uint8Array(8))].map((byte) => byte.toString(16).padStart(2, '0')).join(''); } while (/^0+$/.test(requestId));
+        const timer = globalThis.setTimeout(() => {
+          storageReplies.delete(requestId);
+          reject(new Error('Capture storage transport timed out'));
+        }, message.type === 'capture.ready' ? 5_000 : 35_000);
+        storageReplies.set(requestId, (reply) => { globalThis.clearTimeout(timer); resolve(reply); });
+        void chrome.storage.local.set({ [captureStorageKey(requestId)]: { requestId, tabId, origin: location.origin, message } })
+          .catch((error: unknown) => {
+            globalThis.clearTimeout(timer);
+            storageReplies.delete(requestId);
+            reject(error instanceof Error ? error : new Error('Could not queue capture request'));
+          });
       }));
       try { await capturePort.start(nextSession.id); }
       catch (error) { resetCapture(); throw error; }
@@ -91,6 +101,16 @@ export default defineContentScript({
     };
     chrome.runtime.onMessage.addListener((message: unknown, _sender, respond) => {
       const msg = message as { type?: unknown; projectId?: unknown; session?: unknown; origin?: unknown; tabId?: unknown; traceId?: unknown };
+      const transportReply = message as { type?: unknown; requestId?: unknown; reply?: unknown };
+      if (transportReply?.type === 'capture.transport.reply' && typeof transportReply.requestId === 'string') {
+        const resolve = storageReplies.get(transportReply.requestId);
+        if (resolve) {
+          storageReplies.delete(transportReply.requestId);
+          resolve(transportReply.reply);
+        }
+        respond({ ok: true });
+        return;
+      }
       try {
         if (msg?.type === 'capture.begin' && typeof msg.projectId === 'string' && typeof msg.origin === 'string'
           && Number.isSafeInteger(msg.tabId) && (msg.tabId as number) >= 0 && msg.session && typeof msg.session === 'object') {

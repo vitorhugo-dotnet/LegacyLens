@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the unacknowledged one-shot content→background event send with a bounded, correlated transport that prefers `chrome.runtime.Port` and falls back to acknowledged `runtime.sendMessage` when the Port receiver does not complete its handshake.
+**Goal:** Replace the unacknowledged one-shot content→background event send with a bounded, correlated transport that prefers `chrome.runtime.Port` and falls back to an acknowledged storage outbox when the Port receiver does not complete its handshake.
 
-**Architecture:** The content script owns one Port attempt for an active capture and holds unacknowledged events in a FIFO capped at 100. It waits 5 seconds for the session handshake. If no `ready` arrives, it performs the same sender/session handshake through `runtime.sendMessage`, with its own 5-second timeout; both paths pass events through the same background validation and `CaptureController`, and receive ACK only after `trace.ingest` succeeds. Retryable delivery failures use delays of 250, 1,000, and 2,000 ms, replaying the same event IDs; core deduplication makes replay idempotent. CI has confirmed both `onConnect` and `onMessage` listeners registered while receiving zero calls from content; the next verification tests default same-extension connection and callback-based message delivery.
+**Architecture:** The content script owns one Port attempt for an active capture and holds unacknowledged events in a FIFO capped at 100. It waits 5 seconds for the session handshake. If no `ready` arrives, it writes the same sender/session request to a correlated `chrome.storage.local` outbox and awaits a reply through `chrome.tabs.sendMessage`. The background verifies the live tab ID and origin before calling the shared session/event validators; ACK follows only after `trace.ingest` succeeds. Retryable delivery failures use delays of 250, 1,000, and 2,000 ms, replaying the same event IDs; core deduplication makes replay idempotent. CI runs `37828772614` and `37829466099` confirmed both registered runtime listeners received zero calls from content, so runtime messaging is not used for the fallback.
 
 **Tech Stack:** TypeScript, Chrome MV3 `runtime.Port`, WXT, Vitest, Playwright Windows E2E, existing `CaptureController` and native core.
 
@@ -23,6 +23,8 @@
 - Keep fixture diagnostics and the fixture capture driver unavailable in production builds.
 - Register Port and message transport listeners before optional context-menu initialization.
 - Never accept a message fallback without validating sender tab, HTTP(S) origin, active session, and expiry; never ACK before host persistence.
+- Treat content-supplied tab/origin fields as claims: verify them against `chrome.tabs.get` before constructing the sender passed to shared validators.
+- Keep storage outbox envelopes small and correlated, recover pending envelopes at background startup, remove them after processing, and return replies only to the addressed tab.
 - Do not change the native host protocol or core deduplication key.
 
 ## Review Focus
@@ -197,3 +199,9 @@ Expected: all commands pass and all five E2E tests are discovered.
 - **Type consistency:** Both directions use versioned discriminated envelopes; Task 2 consumes Task 1 parsers, and Task 3 consumes the same message unions and reconnect constants.
 - **Review focus:** Sender mismatch, lost ACK, duplicate delivery, retryable/permanent failure, queue saturation, stop, tab removal, navigation, and restart all have named tests.
 - **Proportion:** The plan is limited to content↔background delivery. Native protocol, investigation API, menu UI, and page-world instrumentation stay unchanged.
+
+## CI-driven transport adaptation (2026-10-08)
+
+Runs `37828772614` and `37829466099` showed zero calls to both the registered `runtime.onConnect` and `runtime.onMessage` listeners from the content script. The plan therefore keeps Port as the first attempt and replaces the fallback carrier with a `chrome.storage.local` outbox. Each request has a random correlated key and carries the tab ID, claimed origin, and capture envelope. The background re-reads the live tab through `chrome.tabs.get`, compares its HTTP(S) origin, then calls the existing handshake/event validators. It removes the outbox item and replies to that tab with `chrome.tabs.sendMessage`; startup recovery handles an item left by a worker restart. Event retries retain the same `eventId` so host deduplication remains effective.
+
+Implementation checkpoint: storage-envelope parser coverage passes (8 tests); the full extension suite passes (118 tests), along with TypeScript typecheck and fixture build. The Windows E2E run is the remaining acceptance gate for this carrier change.
