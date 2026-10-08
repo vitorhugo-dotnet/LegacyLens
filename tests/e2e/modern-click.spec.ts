@@ -57,10 +57,15 @@ test('captures a Jakarta Faces action and reports exact runtime capabilities', a
     await page.locator('#orderForm\\:saveOrder').click();
     await expect(page.locator('#orderForm\\:message')).toHaveText('Order saved', { timeout: 15_000 });
     let result: Investigation | undefined;
-    await expect.poll(async () => {
-      result = await command('investigation.get', { projectId: state.projectId, traceId, offset: 0, limit: 200 });
-      return result.events.items.some((event) => event.kind === 'method.start' && event.metadata?.['code.class'] === 'io.legacylens.fixture.OrderDao' && event.metadata?.['code.method'] === 'insert');
-    }, { timeout: 30_000 }).toBe(true);
+    try {
+      await expect.poll(async () => {
+        result = await command('investigation.get', { projectId: state.projectId, traceId, offset: 0, limit: 200 });
+        return result.events.items.some((event) => event.kind === 'method.start' && event.metadata?.['code.class'] === 'io.legacylens.fixture.OrderDao' && event.metadata?.['code.method'] === 'insert');
+      }, { timeout: 30_000 }).toBe(true);
+    } catch (error) {
+      const stages = (await captureDiagnostics(worker)).filter((record) => record.traceId === traceId);
+      throw new Error(`${error instanceof Error ? error.message : 'modern event missing'}; fixture stages=${JSON.stringify(stages)}`);
+    }
     const events = result!.events.items;
     console.log(`compatibility-baseline ${JSON.stringify({ id: 'jakarta-java21-wildfly35', captureMs: Date.now() - captureStartedAt, eventCount: result!.events.items.length, methodEventCount: events.filter((event) => event.kind === 'method.start').length, staticRelationCount: result!.relations.items.filter((relation) => relation.layer === 'static').length })}`);
     const click = events.find((event) => event.kind === 'jsf.click' && /^[a-f0-9]{16}$/i.test(event.eventId));

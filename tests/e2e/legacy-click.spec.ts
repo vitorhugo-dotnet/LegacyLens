@@ -75,7 +75,13 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
     await expect(page.locator('#domOnly')).toHaveText('DOM changed');
     await expect.poll(() => page.evaluate(() => (window as any).__legacyLensProbe.some((event:{name:string})=>event.name==='legacylens:select')),
       {timeout:5_000,message:'FIXTURE_SETUP: click selection was not observed by the content script'}).toBe(true);
-    await expect.poll(async()=> (await investigation(domTrace)).events.total).toBeGreaterThanOrEqual(1);
+    try {
+      await expect.poll(async()=> (await investigation(domTrace)).events.total,
+        { timeout: 5_000, message: 'click must reach the active trace' }).toBeGreaterThanOrEqual(1);
+    } catch (error) {
+      const stages = (await captureDiagnostics(worker)).filter((record)=>record.traceId===domTrace);
+      throw new Error(`${error instanceof Error ? error.message : 'click missing'}; fixture stages=${JSON.stringify(stages)}`);
+    }
     const dom = await investigation(domTrace);
     const domClick = dom.events.items.find((event)=>event.kind==='jsf.click' && /^[a-f0-9]{16}$/i.test(event.eventId));
     expect(domClick, `jsf.click missing; stages=${JSON.stringify(await captureDiagnostics(worker))}`).toBeDefined();
