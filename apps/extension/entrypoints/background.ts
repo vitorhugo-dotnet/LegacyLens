@@ -110,7 +110,7 @@ function queueMenuRender(tab?: chrome.tabs.Tab): Promise<void> {
   return next;
 }
 
-async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?: boolean; projectId?: string; notifyContent?: boolean } = {}): Promise<CaptureSession | undefined> {
+async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?: boolean; projectId?: string; notifyContent?: boolean; injectScripts?: boolean } = {}): Promise<CaptureSession | undefined> {
   const tabId = tab?.id;
   const origin = originOf(tab?.url);
   if (tabId === undefined || !origin) return;
@@ -127,8 +127,10 @@ async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?
     const projects = await client.request<ProjectListResult>('project.list', { offset: 0, limit: 200 });
     if (!projects.items.some((project) => project.id === projectId)) throw new Error('O projeto selecionado não está mais registrado.');
 
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/content.js'] });
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/page.js'], world: 'MAIN' });
+    if (options.injectScripts !== false) {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/content.js'] });
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/page.js'], world: 'MAIN' });
+    }
     const session = await controller.start({ projectId, tabId, origin });
     if (options.notifyContent !== false) {
       try {
@@ -212,7 +214,7 @@ export default defineBackground(() => {
       if (fixtureMode && msg.type === 'fixture.capture.start' && typeof msg.projectId === 'string') {
         const selected = ((await chrome.storage.session.get(selectedProjectsKey))[selectedProjectsKey] ?? {}) as Record<string, string>;
         await chrome.storage.session.set({ [selectedProjectsKey]: { ...selected, [String(tabId)]: msg.projectId } });
-        const session = await startCapture(sender.tab, { requestPermission: false, projectId: msg.projectId, notifyContent: false });
+        const session = await startCapture(sender.tab, { requestPermission: false, projectId: msg.projectId, notifyContent: false, injectScripts: false });
         if (!session) throw new Error('Fixture capture did not start; inspect the extension service worker log.');
         return { ok: true, session };
       }
