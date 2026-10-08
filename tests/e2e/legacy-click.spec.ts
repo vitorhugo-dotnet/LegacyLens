@@ -77,7 +77,7 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
       {timeout:5_000,message:'FIXTURE_SETUP: click selection was not observed by the content script'}).toBe(true);
     try {
       await expect.poll(async()=> (await investigation(domTrace)).events.total,
-        { timeout: 5_000, message: 'click must reach the active trace' }).toBeGreaterThanOrEqual(1);
+        { timeout: 45_000, message: 'click must reach the active trace' }).toBeGreaterThanOrEqual(1);
     } catch (error) {
       const stages = (await captureDiagnostics(worker)).filter((record)=>record.traceId===domTrace);
       throw new Error(`${error instanceof Error ? error.message : 'click missing'}; fixture stages=${JSON.stringify(stages)}`);

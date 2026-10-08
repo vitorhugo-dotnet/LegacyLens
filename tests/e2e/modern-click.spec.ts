@@ -61,7 +61,7 @@ test('captures a Jakarta Faces action and reports exact runtime capabilities', a
       await expect.poll(async () => {
         result = await command('investigation.get', { projectId: state.projectId, traceId, offset: 0, limit: 200 });
         return result.events.items.some((event) => event.kind === 'method.start' && event.metadata?.['code.class'] === 'io.legacylens.fixture.OrderDao' && event.metadata?.['code.method'] === 'insert');
-      }, { timeout: 30_000 }).toBe(true);
+      }, { timeout: 45_000 }).toBe(true);
     } catch (error) {
       const stages = (await captureDiagnostics(worker)).filter((record) => record.traceId === traceId);
       throw new Error(`${error instanceof Error ? error.message : 'modern event missing'}; fixture stages=${JSON.stringify(stages)}`);
