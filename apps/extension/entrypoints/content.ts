@@ -64,12 +64,18 @@ export default defineContentScript({
       resetCapture();
       session = nextSession;
       captureTabId = tabId;
-      capturePort = new CapturePortClient((name) => chrome.runtime.connect(chrome.runtime.id, { name }), (stage, eventId, code) => {
+      capturePort = new CapturePortClient((name) => chrome.runtime.connect({ name }), (stage, eventId, code) => {
         const outcome = stage.endsWith('ack') || stage.endsWith('ready') ? 'accepted'
           : stage.includes('timeout') ? 'timeout' : stage.includes('nack') || stage.includes('overflow') || stage.includes('invalid') || stage.includes('exhausted') ? 'rejected' : 'started';
         recordContentStage({ stage: 'content.port', outcome, traceId: nextSession.id, tabId,
           ...(eventId ? { eventId } : {}), ...(code ? { code } : {}) });
-      }, undefined, (message) => chrome.runtime.sendMessage(message));
+      }, undefined, (message) => new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(message, (reply) => {
+          const error = chrome.runtime.lastError;
+          if (error) reject(new Error(error.message));
+          else resolve(reply);
+        });
+      }));
       try { await capturePort.start(nextSession.id); }
       catch (error) { resetCapture(); throw error; }
       nonce = [...crypto.getRandomValues(new Uint8Array(16))].map((n) => n.toString(16).padStart(2, '0')).join('');
