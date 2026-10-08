@@ -110,7 +110,7 @@ function queueMenuRender(tab?: chrome.tabs.Tab): Promise<void> {
   return next;
 }
 
-async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?: boolean; projectId?: string } = {}): Promise<CaptureSession | undefined> {
+async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?: boolean; projectId?: string; notifyContent?: boolean } = {}): Promise<CaptureSession | undefined> {
   const tabId = tab?.id;
   const origin = originOf(tab?.url);
   if (tabId === undefined || !origin) return;
@@ -130,12 +130,14 @@ async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/content.js'] });
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/page.js'], world: 'MAIN' });
     const session = await controller.start({ projectId, tabId, origin });
-    try {
-      const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.begin', projectId, session, origin }) as { ok?: boolean; error?: string };
-      if (reply?.error || !reply?.ok) throw new Error(reply?.error ?? 'Content script did not acknowledge capture start');
-    } catch (error) {
-      await controller.stop(tabId);
-      throw error;
+    if (options.notifyContent !== false) {
+      try {
+        const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.begin', projectId, session, origin }) as { ok?: boolean; error?: string };
+        if (reply?.error || !reply?.ok) throw new Error(reply?.error ?? 'Content script did not acknowledge capture start');
+      } catch (error) {
+        await controller.stop(tabId);
+        throw error;
+      }
     }
     await chrome.action.setBadgeText({ tabId, text: '' });
     return session;
@@ -146,7 +148,7 @@ async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?
   }
 }
 
-async function stopCapture(tab?: chrome.tabs.Tab): Promise<void> {
+async function stopCapture(tab?: chrome.tabs.Tab, options: { notifyContent?: boolean } = {}): Promise<void> {
   const tabId = tab?.id;
   if (tabId === undefined) return;
   try {
@@ -154,8 +156,10 @@ async function stopCapture(tab?: chrome.tabs.Tab): Promise<void> {
     const active = controller.get(tabId);
     if (!active) return;
     await controller.stop(tabId);
-    try { await chrome.tabs.sendMessage(tabId, { type: 'capture.end', traceId: active.session.id }); }
-    catch (error) { console.info('LegacyLens stopped capture after the page content script became unavailable', error); }
+    if (options.notifyContent !== false) {
+      try { await chrome.tabs.sendMessage(tabId, { type: 'capture.end', traceId: active.session.id }); }
+      catch (error) { console.info('LegacyLens stopped capture after the page content script became unavailable', error); }
+    }
     await openInvestigation(active.request.projectId, active.session.id);
     await chrome.action.setBadgeText({ tabId, text: '' });
   } catch (error) {
@@ -208,12 +212,12 @@ export default defineBackground(() => {
       if (fixtureMode && msg.type === 'fixture.capture.start' && typeof msg.projectId === 'string') {
         const selected = ((await chrome.storage.session.get(selectedProjectsKey))[selectedProjectsKey] ?? {}) as Record<string, string>;
         await chrome.storage.session.set({ [selectedProjectsKey]: { ...selected, [String(tabId)]: msg.projectId } });
-        const session = await startCapture(sender.tab, { requestPermission: false, projectId: msg.projectId });
+        const session = await startCapture(sender.tab, { requestPermission: false, projectId: msg.projectId, notifyContent: false });
         if (!session) throw new Error('Fixture capture did not start; inspect the extension service worker log.');
         return { ok: true, session };
       }
       if (fixtureMode && msg.type === 'fixture.capture.stop') {
-        await stopCapture(sender.tab);
+        await stopCapture(sender.tab, { notifyContent: false });
         if (controller.get(tabId)) throw new Error('Fixture capture did not stop; inspect the extension service worker log.');
         return { ok: true };
       }
