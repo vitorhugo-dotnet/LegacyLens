@@ -81,7 +81,7 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
     expect(domClick, `jsf.click missing; stages=${JSON.stringify(await captureDiagnostics(worker))}`).toBeDefined();
     const domStages = (await captureDiagnostics(worker)).filter((record)=>record.traceId===domTrace && record.eventId===domClick!.eventId);
     expect(domStages.map((record)=>`${record.stage}.${record.outcome}`), `click transport stages=${JSON.stringify(domStages)}`).toEqual(
-      expect.arrayContaining(['background.receive.started','background.receive.accepted','background.record.accepted','host.ingest.accepted']));
+      expect.arrayContaining(['content.selection.accepted','content.send.accepted','background.receive.started','background.receive.accepted','background.record.accepted','host.ingest.accepted']));
     expect(dom.events.items.filter((event)=>event.kind==='http.server'||event.kind.startsWith('method.')||event.kind.startsWith('db.')),'DOM-only action must have zero Java events').toHaveLength(0);
     await stopFixtureCapture(worker,page);
     await expect.poll(activeTrace,{timeout:15_000,message:'first capture did not stop'}).toBeUndefined();
@@ -121,7 +121,7 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
     expect(orderClick, `order click missing; stages=${JSON.stringify(await captureDiagnostics(worker))}`).toBeDefined();
     const orderStages = (await captureDiagnostics(worker)).filter((record)=>record.traceId===trace && record.eventId===orderClick!.eventId);
     expect(orderStages.map((record)=>`${record.stage}.${record.outcome}`), `order click transport stages=${JSON.stringify(orderStages)}`).toEqual(
-      expect.arrayContaining(['background.receive.started','background.receive.accepted','background.record.accepted','host.ingest.accepted']));
+      expect.arrayContaining(['content.selection.accepted','content.send.accepted','background.receive.started','background.receive.accepted','background.record.accepted','host.ingest.accepted']));
     await expect.poll(async()=> {
       const pending=await investigation(trace);
       const events=pending.events.items;

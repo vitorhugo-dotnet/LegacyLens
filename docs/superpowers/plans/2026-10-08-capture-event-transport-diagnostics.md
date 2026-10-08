@@ -170,12 +170,12 @@ git commit -m "feat(extension): report capture ingest outcomes"
 - Modify: `tests/e2e/legacy-click.spec.ts`
 - Modify: `tests/e2e/modern-click.spec.ts`
 - Modify: `tests/e2e/support/capture.ts` only for a typed fixture-only diagnostic reader
-- Modify: `apps/extension/entrypoints/background.ts` only to expose the bounded diagnostic ring in fixture builds
+- Modify: `apps/extension/entrypoints/background.ts` and `apps/extension/entrypoints/content.ts` only to expose bounded diagnostic records in fixture builds
 - Reuse: `apps/extension/src/capture/diagnostics.ts`
 
 **Interfaces:**
-- Fixture-only `__legacyLensCaptureDiagnostics` ring with a fixed maximum of 100 records; unavailable in production builds.
-- Test helper `captureDiagnostics(worker) -> Promise<CaptureStageRecord[]>` reads the ring without sending a second runtime message through the path being diagnosed.
+- Fixture-only `__legacyLensCaptureDiagnostics` ring with a fixed maximum of 100 background records; content-script stage records use a separate bounded `chrome.storage.local` ring. Both are unavailable in production builds.
+- Test helper `captureDiagnostics(worker) -> Promise<CaptureStageRecord[]>` reads both rings directly through the service worker without sending another runtime message through the path being diagnosed.
 - E2E success requires the same selected click ID to reach the host and appear in `investigation.get` for the expected trace. Stage records are attached to failure output without page or request contents.
 
 - [x] **Step 1: Update the legacy E2E failure output to include fixture stage records and assert selection, explicit background acknowledgement, successful host ingest, and event visibility by the same event ID.**
@@ -202,6 +202,6 @@ Do not execute this section within the diagnostic implementation unless the Task
 
 - **Spec coverage:** Current message flow, silent no-reply paths, safe correlation, each boundary, conditional `Port` redesign, privacy limits, E2E success, and the evidence gate are covered by Tasks 1–4 or the conditional follow-up.
 - **Step clarity:** Every test, implementation, verification, commit, and decision gate names its files, observable result, or command.
-- **Type consistency:** The content and background share the accepted/error envelope; the diagnostics ring carries only `CaptureStageRecord`; fixture tests read it directly from the service worker.
+- **Type consistency:** The content and background share the accepted/error envelope; diagnostic storage carries only `CaptureStageRecord`; fixture tests read it directly from the service worker.
 - **Review focus:** Missing sender, missing acknowledgement, inactive/expired session, host failures, and wrong trace/event correlation each map to a task test.
 - **Proportion:** This plan implements only diagnostic instrumentation and the fix for the boundary identified by it. Port transport work stays conditional and receives a separate execution plan if the CI evidence requires it.

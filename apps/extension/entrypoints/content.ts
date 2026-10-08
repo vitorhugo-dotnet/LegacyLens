@@ -12,6 +12,20 @@ export default defineContentScript({
     const global = globalThis as typeof globalThis & { __legacylensContentScriptInstalled?: boolean };
     if (global.__legacylensContentScriptInstalled) return;
     global.__legacylensContentScriptInstalled = true;
+    const diagnosticsManifest = chrome.runtime.getManifest() as { host_permissions?: string[] };
+    const fixtureDiagnostics = diagnosticsManifest.host_permissions?.includes('http://127.0.0.1/*') === true;
+    const diagnosticsKey = 'legacylens.captureDiagnostics.v1';
+    let diagnosticsWrite = Promise.resolve();
+    const recordContentStage = (record: Parameters<typeof recordCaptureStage>[0]) => recordCaptureStage(record, diagnosticsManifest, (safeRecord) => {
+      console.info('LegacyLens capture stage', JSON.stringify(safeRecord));
+      if (!fixtureDiagnostics) return;
+      diagnosticsWrite = diagnosticsWrite.then(async () => {
+        const existing = ((await chrome.storage.local.get(diagnosticsKey))[diagnosticsKey] ?? []) as typeof safeRecord[];
+        existing.push(safeRecord);
+        if (existing.length > 100) existing.splice(0, existing.length - 100);
+        await chrome.storage.local.set({ [diagnosticsKey]: existing });
+      }).catch(() => console.warn('LegacyLens could not persist fixture diagnostics'));
+    });
 
     let session: CaptureSession | undefined;
     let captureTabId = -1;
@@ -27,7 +41,7 @@ export default defineContentScript({
     const sendCaptureEvent = (message: { type: 'capture.event'; sessionId: string; kind: string; eventId?: string; parentEventId?: string; metadata: Record<string, string> }) =>
       requestCaptureEvent((payload) => chrome.runtime.sendMessage(payload), message,
         { traceId: message.sessionId, tabId: captureTabId },
-        (record) => recordCaptureStage(record, chrome.runtime.getManifest() as { host_permissions?: string[] }));
+        recordContentStage);
     const beginCapture = (projectId: string, nextSession: CaptureSession, expectedOrigin: string, tabId: number) => {
       const expiresAt = Date.parse(nextSession.expiresAt);
       if (nextSession.projectId !== projectId || !/^[a-f0-9]{32}$/i.test(nextSession.id)
@@ -44,6 +58,7 @@ export default defineContentScript({
         selectedSource = id;
         do { clickEventId = [...crypto.getRandomValues(new Uint8Array(8))].map((byte) => byte.toString(16).padStart(2, '0')).join(''); }
         while (/^0+$/.test(clickEventId));
+        recordContentStage({ stage: 'content.selection', outcome: 'accepted', traceId: session!.id, tabId: captureTabId, eventId: clickEventId });
         window.dispatchEvent(new CustomEvent('legacylens:select', { detail: { nonce, source: id } }));
         void sendCaptureEvent({ type: 'capture.event', sessionId: session!.id, kind: 'jsf.click', eventId: clickEventId, metadata: { source: id } })
           .catch((error) => console.warn('LegacyLens capture event failed', error));

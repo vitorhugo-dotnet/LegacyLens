@@ -8,7 +8,8 @@ export interface CaptureStageRecord {
 export async function captureDiagnostics(worker: Worker): Promise<CaptureStageRecord[]> {
   return await worker.evaluate(() => {
     const records = (globalThis as typeof globalThis & { __legacyLensCaptureDiagnostics?: CaptureStageRecord[] }).__legacyLensCaptureDiagnostics;
-    return records ? [...records] : [];
+    const contentRecords = (chrome.storage.local.get('legacylens.captureDiagnostics.v1') as Promise<Record<string, CaptureStageRecord[]>>);
+    return contentRecords.then((stored) => [...(records ?? []), ...(stored['legacylens.captureDiagnostics.v1'] ?? [])]);
   });
 }
 
