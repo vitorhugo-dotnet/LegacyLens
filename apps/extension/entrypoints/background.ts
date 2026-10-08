@@ -46,8 +46,8 @@ function recordDiagnostic(record: import('../src/capture/diagnostics.ts').Captur
 setFixturePhase(fixtureMode ? 'manifest-fixture-enabled' : 'manifest-fixture-disabled');
 // @types/chrome currently omits the documented dynamic-menu lifecycle API.
 const dynamicContextMenus = chrome.contextMenus as typeof chrome.contextMenus & {
-  onShown: { addListener(listener: (info: unknown, tab?: chrome.tabs.Tab) => void): void };
-  refresh(): Promise<void> | void;
+  onShown?: { addListener(listener: (info: unknown, tab?: chrome.tabs.Tab) => void): void };
+  refresh?: () => Promise<void> | void;
 };
 const controller = new CaptureController(client, {
   async load() { return ((await chrome.storage.session.get(stateKey))[stateKey] ?? []) as ActiveCapture[]; },
@@ -138,7 +138,10 @@ async function renderMenu(tab?: chrome.tabs.Tab): Promise<void> {
   // `removeAll` clears stale items across extension reloads; this map resolves this render's radio entries.
   projectMenuMap.clear();
   for (const [menuId, projectId] of nextProjectMap) projectMenuMap.set(menuId, projectId);
-  await dynamicContextMenus.refresh();
+  // Chrome added refresh() later than the base contextMenus API. The menu is
+  // still usable on browsers without it; the next install/startup render will
+  // populate the submenu, while supported browsers refresh it per tab.
+  await dynamicContextMenus.refresh?.();
 }
 
 const projectMenuMap = new Map<string, string>();
@@ -390,9 +393,13 @@ export default defineBackground(() => {
   };
   chrome.runtime.onInstalled.addListener(initializeMenu);
   chrome.runtime.onStartup.addListener(initializeMenu);
-  dynamicContextMenus.onShown.addListener((_info, tab) => {
-    void controller.restore().then(() => queueMenuRender(tab)).catch((error) => console.error('LegacyLens could not refresh context menu', error));
-  });
+  if (dynamicContextMenus.onShown?.addListener) {
+    dynamicContextMenus.onShown.addListener((_info, tab) => {
+      void controller.restore().then(() => queueMenuRender(tab)).catch((error) => console.error('LegacyLens could not refresh context menu', error));
+    });
+  } else {
+    console.warn('LegacyLens dynamic context-menu updates are unavailable; using the startup menu');
+  }
   chrome.action.onClicked.addListener(() => { void openInvestigation().catch((error) => console.error('LegacyLens could not open investigation', error)); });
   chrome.contextMenus.onClicked.addListener((info, tab) => {
     const menuId = String(info.menuItemId);

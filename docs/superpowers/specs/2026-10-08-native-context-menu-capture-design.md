@@ -59,3 +59,11 @@ Falha ao consultar projetos deve aparecer como host desconectado no menu e como 
 - `Gerenciar projetos` abre a página existente de registro/indexação.
 - Com o core em execução e o host não registrado, o menu mostra `Host nativo desconectado`; o guia explica a instalação e a diferença entre os dois processos.
 - O clique no ícone abre a página da extensão, sem injetar popup.
+
+## Diagnóstico de compatibilidade do menu
+
+Após a instalação da versão com submenu, foi observado no navegador: `Service worker registration failed. Status code: 15` e `Uncaught TypeError: Cannot read properties of undefined (reading 'addListener')` no background; o submenu não aparecia. A inicialização registrava `contextMenus.onShown.addListener` sem verificar se o evento dinâmico estava disponível. Como o erro interrompe a execução do background antes do registro de `contextMenus.onClicked`, essa é a causa provável do menu ausente; o número de linha do bundle minificado, sozinho, não identifica o membro ausente.
+
+A implementação agora trata `contextMenus.onShown` e `contextMenus.refresh()` como capacidades opcionais. Quando o evento não existe, registra um aviso e mantém a criação do menu por `onInstalled`/`onStartup`; quando `refresh()` não existe, mantém o menu criado sem a atualização dinâmica. O browser não precisa ser reiniciado para atualizar uma extensão: recarregue-a em `chrome://extensions` (ou `edge://extensions`) e recarregue a aba da aplicação. Se o erro persistir, registre a versão do navegador, o log completo do service worker e a disponibilidade de `chrome.contextMenus.onShown` para localizar outra API ausente.
+
+O aviso `Permissions policy violation: unload is not allowed in this document` e a referência a `content-scripts/page.js` foram vistos no contexto da página. O código da extensão não registra listener `unload`; portanto esses avisos são tratados como uma linha de investigação separada e não como causa confirmada do registro do submenu. Critério de aceite adicional: após recarregar a extensão, o worker deve permanecer ativo sem erro de `addListener` e o item pai `LegacyLens` deve aparecer no menu de contexto de uma página HTTP/HTTPS.
