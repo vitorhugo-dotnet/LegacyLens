@@ -46,8 +46,11 @@ Esse pacote é experimental e não promete instalador, registro automático do h
    ```powershell
    .\scripts\install-native-host.ps1 -PackageDirectory 'C:\Program Files\LegacyLens' -ExtensionId '<ID exibido pelo navegador>'
    .\legacylens.exe project register --root 'C:\src\MinhaAplicacao' --name 'MinhaAplicacao'
+   $env:LEGACYLENS_EXTENSION_ID = '<o mesmo ID exibido pelo navegador>'
    .\legacylens.exe serve
    ```
+
+   O ID precisa ser informado ao `serve` para autorizar a origem da extensão na API local. A variável vale para essa janela do PowerShell.
 
 4. Deixe o terminal com `serve` aberto e abra a aplicação JSF. Clique com o botão direito na página e abra o submenu **LegacyLens**. Escolha o projeto na lista; essa seleção vale somente para a aba atual. Abra o submenu novamente e escolha **Iniciar captura**. Na primeira captura do site, autorize o acesso solicitado pelo navegador, selecione o elemento JSF e realize a interação.
 5. Para encerrar, abra o submenu **LegacyLens** e escolha **Parar captura**. A página de investigação será aberta para o projeto e a captura. Use **Gerenciar projetos** no submenu ou clique no ícone da extensão para cadastrar projetos, indexar código e pesquisar resultados. Os dados do projeto ficam na máquina local.

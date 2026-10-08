@@ -17,8 +17,11 @@ O ZIP de release contém o core, o host de mensagens nativas, a extensão Chromi
 4. Inicie o core:
 
    ```powershell
+   $env:LEGACYLENS_EXTENSION_ID = '<ID copiado da página de extensões>'
    .\legacylens.exe serve
    ```
+
+   Use o mesmo ID passado em `-ExtensionId` no passo anterior. Sem essa variável, o core não autoriza a origem da extensão, mesmo que `status` reporte o serviço HTTP como saudável. A variável vale somente para essa janela do PowerShell.
 
 5. Abra uma aplicação JSF compatível. Clique com o botão direito na página e abra **LegacyLens**. Selecione o projeto, reabra o submenu e escolha **Iniciar captura**. Autorize o acesso ao site quando solicitado, selecione o elemento JSF e execute a interação. Para finalizar, escolha **Parar captura**; a investigação da captura será aberta. **Gerenciar projetos** e o ícone da extensão abrem a página de registro, indexação e pesquisa.
 
@@ -29,7 +32,7 @@ O comando `legacylens.exe status` verifica somente a API HTTP do core. A extens�
 Confira estes pontos:
 
 1. Deixe `legacylens.exe serve` em execução e confirme a resposta com `legacylens.exe status`.
-2. Em `chrome://extensions` ou `edge://extensions`, confirme que a extensão está habilitada e copie novamente seu ID. O ID deve ser o mesmo usado em `-ExtensionId`; recarregar uma extensão unpacked com outra identidade exige registrar o host para o novo ID.
+2. Em `chrome://extensions` ou `edge://extensions`, confirme que a extensão está habilitada e copie novamente seu ID. O ID deve ser o mesmo usado em `-ExtensionId` e em `$env:LEGACYLENS_EXTENSION_ID`; recarregar uma extensão unpacked com outra identidade exige registrar o host e reiniciar `serve` com o novo ID.
 3. Confirme que o pacote extraído ainda existe no caminho informado em `-PackageDirectory` e que contém `legacylens-host.exe`.
 4. Execute novamente o instalador para o usuário atual. Se o PowerShell bloquear o script por política de execução, abra uma sessão PowerShell nessa pasta e rode:
 
@@ -41,6 +44,8 @@ Confira estes pontos:
    O escopo `Process` vale somente para essa janela do PowerShell; não altera a política permanente do usuário ou da máquina. O registro também é feito somente no usuário atual.
 
 5. Recarregue a extensão na página de extensões e abra novamente o menu de contexto. Se o host continuar desconectado, confirme se o navegador e o host estão sendo executados no mesmo usuário do Windows e repita a instalação com o ID atualmente exibido.
+
+Se o Chrome informar `Error when communicating with the native messaging host` depois de a mensagem `Specified native messaging host not found` ter desaparecido, confirme que `serve` foi iniciado na mesma sessão do PowerShell com `$env:LEGACYLENS_EXTENSION_ID` definido. Pare o processo `serve`, defina a variável e inicie-o novamente; em seguida, atualize `investigation.html`.
 
 Não é necessário instalar Go ou Node. Java é necessário para executar o agente/analisador incluído. A análise estática básica continua disponível sem CodeQL CLI.
 
