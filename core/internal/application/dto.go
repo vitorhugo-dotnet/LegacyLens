@@ -267,12 +267,19 @@ type OpenResult struct {
 }
 
 type ExplanationRequest struct {
-	ProjectID domain.ID `json:"projectId"`
-	TraceID   domain.ID `json:"traceId"`
-	Question  string    `json:"question"`
+	ProjectID   domain.ID   `json:"projectId"`
+	TraceID     domain.ID   `json:"traceId"`
+	Question    string      `json:"question"`
+	EvidenceIDs []domain.ID `json:"evidenceIds"`
+}
+
+type ExplanationClaim struct {
+	Text        string      `json:"text"`
+	EvidenceIDs []domain.ID `json:"evidenceIds"`
+	Confidence  string      `json:"confidence"`
 }
 
 type ExplanationResult struct {
-	Text        string      `json:"text"`
-	EvidenceIDs []domain.ID `json:"evidenceIds"`
+	Claims      []ExplanationClaim `json:"claims"`
+	Limitations []string           `json:"limitations"`
 }

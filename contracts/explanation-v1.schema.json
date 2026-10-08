@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://legacylens.dev/schemas/explanation-v1.json",
+  "title": "LegacyLens explanation provider contract",
+  "oneOf": [
+    {
+      "title": "Request",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "requestId", "data"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "requestId": { "type": "string", "pattern": "^[a-f0-9]{32}$" },
+        "data": { "$ref": "#/$defs/package" }
+      }
+    },
+    {
+      "title": "Response",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claims", "limitations"],
+      "properties": {
+        "claims": { "type": "array", "maxItems": 40, "items": { "$ref": "#/$defs/claim" } },
+        "limitations": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 1, "maxLength": 1000 } }
+      }
+    }
+  ],
+  "$defs": {
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question", "deploymentRevisions", "traceIncomplete", "evidence", "limitations"],
+      "properties": {
+        "question": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "indexedRevisionId": { "type": "string" },
+        "deploymentRevisions": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "traceIncomplete": { "type": "boolean" },
+        "evidence": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "$ref": "#/$defs/evidence" } },
+        "limitations": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "path": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))" },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "evidenceIds", "confidence"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "evidenceIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "confidence": { "enum": ["supported", "hypothesis"] }
+      },
+      "allOf": [{
+        "if": { "properties": { "confidence": { "const": "supported" } } },
+        "then": { "properties": { "evidenceIds": { "minItems": 1 } } }
+      }]
+    }
+  }
+}

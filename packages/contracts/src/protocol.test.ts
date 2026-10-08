@@ -63,6 +63,24 @@ describe('parseEnvelope', () => {
     } }).command).toBe('location.open');
   });
 
+  it('requires selected evidence in a local explanation preview', () => {
+    const base = { protocolVersion: 1, requestId: 'r1', command: 'explanation.preview', payload: {
+      projectId: 'p1', traceId: '0123456789abcdef0123456789abcdef', question: 'Why is this query executed?', evidenceIds: ['e1'],
+    } };
+    expect(parseEnvelope(base).command).toBe('explanation.preview');
+    expect(() => parseEnvelope({ ...base, payload: { ...base.payload, evidenceIds: [] } }))
+      .toThrowError(expect.objectContaining({ code: 'INVALID_PAYLOAD' }));
+  });
+
+  it('accepts explanation generation only with explicit consent for a preview token', () => {
+    const envelope = { protocolVersion: 1, requestId: 'r1', command: 'explanation.generate', payload: { previewId: 'pv1', consent: true } };
+    expect(parseEnvelope(envelope).command).toBe('explanation.generate');
+    expect(() => parseEnvelope({ ...envelope, payload: { previewId: 'pv1', consent: false } }))
+      .toThrowError(expect.objectContaining({ code: 'INVALID_PAYLOAD' }));
+    expect(() => parseEnvelope({ ...envelope, payload: { previewId: 'pv1' } }))
+      .toThrowError(expect.objectContaining({ code: 'INVALID_PAYLOAD' }));
+  });
+
   it('rejects ingested events without a positive sequence or non-empty kind', () => {
     const event = { projectId: 'p1', traceId: '0123456789abcdef0123456789abcdef', producerId: 'agent', sequence: 1,
       eventId: 'event-1', kind: 'http.request', occurredAt: '2026-09-30T12:00:00Z' };

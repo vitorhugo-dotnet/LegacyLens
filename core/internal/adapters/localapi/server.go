@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -32,6 +33,7 @@ type Services struct {
 	Captures       *application.CaptureService
 	Presence       *application.AgentPresence
 	Investigations *application.InvestigationService
+	Explanations   *application.ExplanationService
 	Locations      *application.LocationService
 }
 
@@ -441,8 +443,32 @@ func (s *server) execute(ctx context.Context, request envelope) (any, *apiError)
 			return failed()
 		}
 		return result, nil
-	case "explanation.preview", "explanation.generate":
-		return unsupported()
+	case "explanation.preview":
+		var payload application.ExplanationRequest
+		if err := decode(&payload); err != nil || payload.ProjectID == "" || !validTraceID(payload.TraceID) || strings.TrimSpace(payload.Question) == "" || len(payload.Question) > 2000 || len(payload.EvidenceIDs) == 0 || len(payload.EvidenceIDs) > 20 || s.services.Explanations == nil {
+			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Explanation preview requires a project, trace, question, and selected evidence."}
+		}
+		preview, err := s.services.Explanations.Preview(ctx, payload)
+		if err != nil { return nil, &apiError{http.StatusUnprocessableEntity, "EXPLANATION_PREVIEW_FAILED", "The explanation preview could not be created."} }
+		return preview, nil
+	case "explanation.generate":
+		var payload application.ExplanationConsent
+		if err := decode(&payload); err != nil || payload.PreviewID == "" || s.services.Explanations == nil {
+			return nil, &apiError{http.StatusBadRequest, "INVALID_PAYLOAD", "Explanation generation requires a preview id and explicit consent."}
+		}
+		if !payload.Consented { return nil, &apiError{http.StatusForbidden, "EXPLICIT_CONSENT_REQUIRED", "Explicit consent is required before sending the previewed package."} }
+		result, err := s.services.Explanations.Generate(ctx, payload)
+		if errors.Is(err, application.ErrUnknownExplanationEvidence) {
+			return nil, &apiError{http.StatusUnprocessableEntity, "EXPLANATION_EVIDENCE_REJECTED", "The provider referenced evidence outside the approved package."}
+		}
+		if errors.Is(err, application.ErrExplanationPreviewExpired) {
+			return nil, &apiError{http.StatusGone, "EXPLANATION_PREVIEW_EXPIRED", "Create and review a new preview before sending."}
+		}
+		if errors.Is(err, application.ErrExplainerUnavailable) {
+			return nil, &apiError{http.StatusServiceUnavailable, "EXPLANATION_PROVIDER_UNAVAILABLE", "No explanation provider is configured in the core."}
+		}
+		if err != nil { return nil, &apiError{http.StatusBadGateway, "EXPLANATION_FAILED", "The explanation provider did not return a valid result."} }
+		return result, nil
 	default:
 		return unsupported()
 	}

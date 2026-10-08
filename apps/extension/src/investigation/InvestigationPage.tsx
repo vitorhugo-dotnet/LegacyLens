@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Event, Investigation, Page } from '@legacylens/contracts/src/protocol.ts';
 import type { CommandClient } from '../native/client.ts';
 import { EvidencePanel } from './EvidencePanel.tsx';
+import { ExplanationPanel } from './ExplanationPanel.tsx';
 import { GraphView, type Selection } from './GraphView.tsx';
 
 type Collections = Pick<Investigation, 'events' | 'diagnostics' | 'symbols' | 'relations' | 'evidence'>;
@@ -91,5 +92,6 @@ export function InvestigationPage({ client, projectId, traceId }: { client: Comm
       <GraphView events={events.items} symbols={symbols.items} relations={relations.items} showStatic={showStatic} onSelect={setSelection} />
       <EvidencePanel selection={selection} diagnostics={diagnostics.items} evidence={evidence.items} client={client} projectId={projectId} />
     </div>
+    <ExplanationPanel client={client} projectId={projectId} traceId={trace.id} evidence={evidence.items} />
   </main>;
 }

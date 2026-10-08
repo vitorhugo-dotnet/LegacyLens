@@ -73,5 +73,6 @@ type Editor interface {
 }
 
 type Explainer interface {
-	Generate(context.Context, ExplanationRequest) (ExplanationResult, error)
+	Destination() string
+	Explain(context.Context, ExplanationPackage) (ExplanationResult, error)
 }

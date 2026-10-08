@@ -30,6 +30,8 @@ try {
   Copy-Item packaging/release-manifest.schema.json (Join-Path $stage 'docs')
   Copy-Item docs/compatibility/matrix.json (Join-Path $stage 'docs/compatibility-matrix.json')
   Copy-Item docs/user/windows-installation.md (Join-Path $stage 'docs/windows-installation.md')
+  Copy-Item docs/user/explanations.md (Join-Path $stage 'docs/explanations.md')
+  Copy-Item contracts/explanation-v1.schema.json (Join-Path $stage 'docs/explanation-v1.schema.json')
   Copy-Item README.md (Join-Path $stage 'README.md')
   Copy-Item LICENSE (Join-Path $stage 'LICENSE')
   $sha = (git rev-parse HEAD).Trim()

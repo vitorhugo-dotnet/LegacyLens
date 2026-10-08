@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"legacylens/core/internal/adapters/explainer"
 	"legacylens/core/internal/adapters/filesystem"
 	"legacylens/core/internal/adapters/intellij"
 	"legacylens/core/internal/adapters/localapi"
@@ -94,7 +95,23 @@ func runtimeServices(store *sqlite.Store) localapi.Services {
 	captures := application.NewCaptureService(store, application.CaptureConfig{})
 	locations := application.NewLocationService(store, intellij.NewEditor(os.Getenv("LEGACYLENS_INTELLIJ_LAUNCHER"), nil))
 	presence := application.NewAgentPresence(time.Now, 15*time.Second, 128)
-	return localapi.Services{Projects: projects, Indexer: indexer, Search: application.NewSearchService(store, store), Impact: application.NewImpactService(store), Captures: captures, Presence: presence, Investigations: application.NewInvestigationService(store).WithAgentPresence(presence), Locations: locations}
+	investigations := application.NewInvestigationService(store).WithAgentPresence(presence)
+	return localapi.Services{Projects: projects, Indexer: indexer, Search: application.NewSearchService(store, store), Impact: application.NewImpactService(store), Captures: captures, Presence: presence, Investigations: investigations, Explanations: application.NewExplanationService(investigations, nil), Locations: locations}
+}
+
+func configureExplainer(services *localapi.Services) error {
+	providerEndpoint := strings.TrimSpace(os.Getenv("LEGACYLENS_EXPLAINER_URL"))
+	providerToken := os.Getenv("LEGACYLENS_EXPLAINER_TOKEN")
+	var provider application.Explainer
+	if providerEndpoint == "" && providerToken != "" { return errors.New("explanation provider configuration is invalid") }
+	if providerEndpoint != "" {
+		configured, err := explainer.NewHTTP(explainer.HTTPConfig{Endpoint: providerEndpoint, Token: providerToken})
+		if err != nil { return errors.New("explanation provider configuration is invalid") }
+		provider = configured
+	}
+	if services == nil || services.Investigations == nil { return errors.New("investigation service is unavailable") }
+	services.Explanations = application.NewExplanationService(services.Investigations, provider)
+	return nil
 }
 
 func serve() error {
@@ -128,7 +145,9 @@ func serve() error {
 		return err
 	}
 	defer os.Remove(discoveryPath)
-	handler := localapi.NewServer(runtimeServices(store), localapi.AuthConfig{HostToken: discovery.HostToken, AgentToken: discovery.AgentToken, ExtensionOrigins: discovery.ExtensionOrigins})
+	services := runtimeServices(store)
+	if err := configureExplainer(&services); err != nil { return err }
+	handler := localapi.NewServer(services, localapi.AuthConfig{HostToken: discovery.HostToken, AgentToken: discovery.AgentToken, ExtensionOrigins: discovery.ExtensionOrigins})
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

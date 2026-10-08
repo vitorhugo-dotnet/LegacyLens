@@ -86,15 +86,15 @@ func TestAPIUsesSeparateAgentCredential(t *testing.T) {
 }
 
 func TestAPIAgentHeartbeatRequiresAgentCredentialAndStrictIdentity(t *testing.T) {
- now := time.Date(2026,10,1,12,0,0,0,time.UTC)
- presence := application.NewAgentPresence(func() time.Time { return now },5*time.Second,2)
- handler := NewServer(Services{Presence:presence},AuthConfig{HostToken:"host-secret-token",AgentToken:"agent-secret-token"})
- body := `{"protocolVersion":1,"requestId":"beat","command":"agent.heartbeat","payload":{"projectId":"p1","producerId":"process-a"}}`
- if got := apiRequest(handler,"/v1/events","host-secret-token","",body).Code; got != http.StatusUnauthorized { t.Fatalf("host credential accepted: %d",got) }
- if got := apiRequest(handler,"/v1/commands","host-secret-token","",body).Code; got == http.StatusOK { t.Fatalf("host command accepted heartbeat: %d",got) }
- if got := apiRequest(handler,"/v1/events","agent-secret-token","",body).Code; got != http.StatusOK { t.Fatalf("agent heartbeat: %d",got) }
- extra := `{"protocolVersion":1,"requestId":"beat","command":"agent.heartbeat","payload":{"projectId":"p1","producerId":"process-a","token":"secret"}}`
- if got := apiRequest(handler,"/v1/events","agent-secret-token","",extra).Code; got != http.StatusBadRequest { t.Fatalf("extra field accepted: %d",got) }
+	now := time.Date(2026,10,1,12,0,0,0,time.UTC)
+	presence := application.NewAgentPresence(func() time.Time { return now },5*time.Second,2)
+	handler := NewServer(Services{Presence:presence},AuthConfig{HostToken:"host-secret-token",AgentToken:"agent-secret-token"})
+	body := `{"protocolVersion":1,"requestId":"beat","command":"agent.heartbeat","payload":{"projectId":"p1","producerId":"process-a"}}`
+	if got := apiRequest(handler,"/v1/events","host-secret-token","",body).Code; got != http.StatusUnauthorized { t.Fatalf("host credential accepted: %d",got) }
+	if got := apiRequest(handler,"/v1/commands","host-secret-token","",body).Code; got == http.StatusOK { t.Fatalf("host command accepted heartbeat: %d",got) }
+	if got := apiRequest(handler,"/v1/events","agent-secret-token","",body).Code; got != http.StatusOK { t.Fatalf("agent heartbeat: %d",got) }
+	extra := `{"protocolVersion":1,"requestId":"beat","command":"agent.heartbeat","payload":{"projectId":"p1","producerId":"process-a","token":"secret"}}`
+	if got := apiRequest(handler,"/v1/events","agent-secret-token","",extra).Code; got != http.StatusBadRequest { t.Fatalf("extra field accepted: %d",got) }
 }
 
 func TestAPIRejectsInvalidPayloadAndSharedCredentials(t *testing.T) {
@@ -318,6 +318,45 @@ func TestAPIRejectsEventMissingKindBeforeCallingCaptureService(t *testing.T) {
 		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"INVALID_PAYLOAD"`) {
 			t.Fatalf("invalid event response = %d %s", response.Code, response.Body)
 		}
+	}
+}
+
+type explanationAPIProvider struct{ calls int }
+
+func (p *explanationAPIProvider) Destination() string {
+	return "https://provider.example/v1/explanations"
+}
+func (p *explanationAPIProvider) Explain(_ context.Context, request application.ExplanationPackage) (application.ExplanationResult, error) {
+	p.calls++
+	return application.ExplanationResult{Claims: []application.ExplanationClaim{{Text: "DAO writes the row.", EvidenceIDs: []domain.ID{request.Evidence[0].ID}, Confidence: "supported"}}, Limitations: []string{}}, nil
+}
+
+func TestAPIExplanationPreviewIsLocalAndGenerateRequiresConsent(t *testing.T) {
+	traceID := domain.ID("0123456789abcdef0123456789abcdef")
+	store := captureStoreStub{investigation: application.Investigation{Project: domain.Project{ID: "p1"}, Trace: domain.Trace{ID: traceID, ProjectID: "p1"}, Evidence: []domain.Evidence{{ID: "e1", Kind: "java-method", Source: "private SQL literal"}}}}
+	provider := &explanationAPIProvider{}
+	explanations := application.NewExplanationService(application.NewInvestigationService(store), provider)
+	handler := NewServer(Services{Explanations: explanations}, AuthConfig{HostToken: "host-secret-token", AgentToken: "agent-secret-token"})
+	previewResponse := apiRequest(handler, "/v1/commands", "host-secret-token", "", `{"protocolVersion":1,"requestId":"r1","command":"explanation.preview","payload":{"projectId":"p1","traceId":"0123456789abcdef0123456789abcdef","question":"What writes this?","evidenceIds":["e1"]}}`)
+	if previewResponse.Code != http.StatusOK || provider.calls != 0 {
+		t.Fatalf("preview response=%d calls=%d body=%s", previewResponse.Code, provider.calls, previewResponse.Body)
+	}
+	var preview struct {
+		Result application.ExplanationPreview `json:"result"`
+	}
+	if err := json.Unmarshal(previewResponse.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.Result.PreviewID == "" || !preview.Result.ProviderAvailable || strings.Contains(previewResponse.Body.String(), "private SQL literal") {
+		t.Fatalf("unsafe/invalid preview: %s", previewResponse.Body)
+	}
+	denied := apiRequest(handler, "/v1/commands", "host-secret-token", "", `{"protocolVersion":1,"requestId":"r2","command":"explanation.generate","payload":{"previewId":"`+preview.Result.PreviewID+`","consent":false}}`)
+	if denied.Code == http.StatusOK || provider.calls != 0 {
+		t.Fatalf("unconsented generate response=%d calls=%d", denied.Code, provider.calls)
+	}
+	generated := apiRequest(handler, "/v1/commands", "host-secret-token", "", `{"protocolVersion":1,"requestId":"r3","command":"explanation.generate","payload":{"previewId":"`+preview.Result.PreviewID+`","consent":true}}`)
+	if generated.Code != http.StatusOK || provider.calls != 1 {
+		t.Fatalf("consented generate response=%d calls=%d body=%s", generated.Code, provider.calls, generated.Body)
 	}
 }
 

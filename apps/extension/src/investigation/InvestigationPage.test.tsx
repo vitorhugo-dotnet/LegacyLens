@@ -179,3 +179,28 @@ test('ignores a stale source-open completion after selecting another node', asyn
   await waitFor(() => expect(screen.getByText('Fonte: b.xhtml:2')).toBeVisible());
   expect(screen.queryByText(/Old source/)).not.toBeInTheDocument();
 });
+
+test('keeps the investigation graph usable when the explanation provider fails', async () => {
+  const oneEvent = event('e1', 1);
+  const investigation = { ...base(), trace: { ...base().trace, incomplete: false }, events: page([oneEvent]),
+    evidence: page([{ id: 'ev1', kind: 'observed-event', source: 'private source is not sent' }]) } satisfies Investigation;
+  const client: CommandClient = { async request<T>(command: Command) {
+    if (command === 'investigation.get') return investigation as T;
+    if (command === 'explanation.preview') return { previewId: 'pv', expiresAt: '2026-10-08T12:05:00Z', destination: 'https://provider.example/v1/explanations', providerAvailable: true,
+      package: { question: 'What happened?', deploymentRevisions: [], traceIncomplete: false,
+        evidence: [{ id: 'ev1', kind: 'observed-event' }], limitations: ['Source text is excluded.'] } } as T;
+    if (command === 'explanation.generate') throw new Error('EXPLANATION_FAILED: provider unavailable');
+    throw new Error(`unexpected command: ${command}`);
+  } };
+  render(<InvestigationPage client={client} projectId="p" traceId={traceId} />);
+  const eventButton = await screen.findByRole('button', { name: 'jsf.click · e1' });
+  fireEvent.change(screen.getByLabelText('Pergunta'), { target: { value: 'What happened?' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: /ev1/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Pré-visualizar envio' }));
+  fireEvent.click(await screen.findByRole('checkbox', { name: /Autorizo enviar/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Enviar e gerar explicação' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('EXPLANATION_FAILED');
+  expect(eventButton).toBeVisible();
+  fireEvent.click(eventButton);
+  expect(screen.getByText('Produtor browser, sequência 1, evento e1')).toBeVisible();
+});

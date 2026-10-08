@@ -73,3 +73,26 @@ Describe 'Windows release package' {
     }
   }
 }
+
+Describe 'Task 20 explanation package assets' {
+  It 'copies the provider instructions and versioned contract into the release package' {
+    $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+    $packager = Get-Content -Raw (Join-Path $root 'scripts/package-release.ps1')
+    foreach ($source in @('docs/user/explanations.md','contracts/explanation-v1.schema.json')) {
+      if (-not (Test-Path -LiteralPath (Join-Path $root $source))) { throw "Explanation package source is missing $source." }
+      if ($packager -notmatch [regex]::Escape("Copy-Item $source")) { throw "Release package does not copy $source." }
+    }
+    $contract = Get-Content -Raw (Join-Path $root 'contracts/explanation-v1.schema.json') | ConvertFrom-Json
+    if ($contract.oneOf.Count -ne 2 -or -not $contract.'$defs'.package -or -not $contract.'$defs'.claim) { throw 'Explanation contract must define request and response package/claim schemas.' }
+  }
+}
+
+Describe 'Task 20 staged explanation assets' {
+  It 'contains the provider guide and schema in the Windows package stage' {
+    $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+    $stage = Join-Path $root 'artifacts/stage'
+    foreach ($path in @('docs/explanations.md','docs/explanation-v1.schema.json')) {
+      if (-not (Test-Path -LiteralPath (Join-Path $stage $path))) { throw "Windows package stage is missing $path." }
+    }
+  }
+}

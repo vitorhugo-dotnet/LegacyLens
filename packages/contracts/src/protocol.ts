@@ -231,6 +231,42 @@ export interface OpenResult {
   line?: number;
 }
 
+export interface ExplanationEvidence {
+  id: ID;
+  kind: string;
+  path?: string;
+  line?: number;
+  column?: number;
+}
+
+export interface ExplanationPackage {
+  question: string;
+  indexedRevisionId?: ID;
+  deploymentRevisions: ID[];
+  traceIncomplete: boolean;
+  evidence: ExplanationEvidence[];
+  limitations: string[];
+}
+
+export interface ExplanationPreview {
+  previewId: string;
+  expiresAt: string;
+  destination: string;
+  providerAvailable: boolean;
+  package: ExplanationPackage;
+}
+
+export interface ExplanationClaim {
+  text: string;
+  evidenceIds: ID[];
+  confidence: 'supported' | 'hypothesis';
+}
+
+export interface ExplanationResult {
+  claims: ExplanationClaim[];
+  limitations: string[];
+}
+
 export interface ProtocolErrorPayload {
   code: string;
   message: string;
@@ -347,19 +383,16 @@ function validatePayload(command: (typeof commands)[number], payload: Record<str
     case 'capture.stop':
     case 'trace.ingest':
     case 'investigation.get':
-    case 'explanation.preview':
-    case 'explanation.generate':
       only(command === 'project.status' ? ['projectId']
         : command === 'project.index' ? ['projectId', 'paths', 'offset', 'limit']
           : command === 'symbol.search' ? ['projectId', 'revisionId', 'text', 'kinds', 'limit', 'offset']
             : command === 'graph.explore' ? ['projectId', 'revisionId', 'symbolIds', 'depth', 'offset', 'limit']
               : command === 'impact.query' ? ['projectId', 'revisionId', 'symbolId', 'depth', 'offset', 'limit']
                 : command === 'capture.start' ? ['projectId', 'tabId']
-                  : command === 'capture.stop' ? ['projectId', 'traceId']
+                    : command === 'capture.stop' ? ['projectId', 'traceId']
                     : command === 'trace.ingest' ? ['projectId', 'events']
                       : command === 'investigation.get' ? ['projectId', 'traceId', 'offset', 'limit']
-                        : command === 'location.open' ? ['projectId', 'location']
-                          : ['projectId', 'traceId', 'question']);
+                        : ['projectId', 'location']);
       requireString('projectId');
       if (command === 'project.status') break;
       if (command === 'location.open') {
@@ -412,11 +445,22 @@ function validatePayload(command: (typeof commands)[number], payload: Record<str
           requireTraceId('traceId');
           if (payload.offset !== undefined && (typeof payload.offset !== 'number' || !Number.isInteger(payload.offset) || payload.offset < 0 || payload.offset > 1_000_000_000)) invalidPayload('offset must be an integer from 0 to 1000000000');
           if (payload.limit !== undefined && (typeof payload.limit !== 'number' || !Number.isInteger(payload.limit) || payload.limit < 0 || payload.limit > 200)) invalidPayload('limit must be an integer from 0 to 200');
-        } else if (command === 'explanation.preview' || command === 'explanation.generate') {
-          requireTraceId('traceId');
-          requireString('question');
         }
       }
+      break;
+    case 'explanation.preview':
+      only(['projectId', 'traceId', 'question', 'evidenceIds']);
+      requireString('projectId');
+      requireTraceId('traceId');
+      requireString('question');
+      if ((payload.question as string).trim().length === 0 || (payload.question as string).length > 2000) invalidPayload('question must contain 1 to 2000 characters');
+      if (!Array.isArray(payload.evidenceIds) || payload.evidenceIds.length < 1 || payload.evidenceIds.length > 20
+          || !stringArray(payload.evidenceIds) || new Set(payload.evidenceIds).size !== payload.evidenceIds.length) invalidPayload('evidenceIds must contain 1 to 20 unique evidence ids');
+      break;
+    case 'explanation.generate':
+      only(['previewId', 'consent']);
+      requireString('previewId');
+      if (payload.consent !== true) invalidPayload('explanation generation requires explicit consent');
       break;
   }
 }
