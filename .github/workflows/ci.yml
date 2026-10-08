@@ -119,6 +119,13 @@ jobs:
           mvn -B -f fixtures/legacy/pom.xml verify
           npm exec --workspace tests/e2e -- playwright install chromium
           npm test --workspace tests/e2e -- legacy-click.spec.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: legacy-e2e-results-${{ github.sha }}
+          path: tests/e2e/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
 
   modern-e2e:
     name: Jakarta fixture, click flow, and redeploy isolation
@@ -151,6 +158,13 @@ jobs:
           npm exec --workspace tests/e2e -- playwright install chromium
           npm test --workspace tests/e2e -- modern-click.spec.ts
           npm test --workspace tests/e2e -- redeploy.spec.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: modern-e2e-results-${{ github.sha }}
+          path: tests/e2e/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
 
   windows-package:
     name: Build Windows x64 package

@@ -54,8 +54,13 @@ export default defineContentScript({
       if (fixtureMode && msg?.type === 'fixture.capture.start' && typeof msg.projectId === 'string') {
         void ask<{ ok: boolean; session: CaptureSession }>({ type: 'fixture.capture.start', projectId: msg.projectId })
           .then((reply) => {
-            beginCapture(msg.projectId as string, reply.session, location.origin);
-            respond({ ok: true, session: reply.session });
+            try {
+              if (!reply?.session) throw new Error('Background did not return a fixture capture session');
+              beginCapture(msg.projectId as string, reply.session, location.origin);
+              respond({ ok: true, session: reply.session });
+            } catch (error) {
+              respond({ error: error instanceof Error ? error.message : 'Fixture capture setup failed' });
+            }
           }, (error: unknown) => respond({ error: error instanceof Error ? error.message : 'Fixture capture start failed' }));
         return true;
       }
