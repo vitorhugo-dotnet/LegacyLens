@@ -103,7 +103,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Could not configure fixture MySQL root account.' }
   $mysqlRootConnection = $mysqlConnection + @('--password=fixture-root')
   $schemaSql = Get-Content -Raw -LiteralPath $schema
-  & $mysql @mysqlRootConnection "--execute=$schemaSql"
+  $schemaSql | & $mysql @mysqlRootConnection
   if ($LASTEXITCODE -ne 0) { throw 'Could not initialize fixture MySQL schema.' }
   if ($ExtensionId) {
     $manifestPath = Join-Path $cache 'io.legacylens.host.json'
