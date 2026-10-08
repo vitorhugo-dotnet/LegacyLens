@@ -13,6 +13,7 @@ import (
 const (
 	defaultCaptureEventLimit = 10_000
 	defaultCaptureDuration   = 10 * time.Minute
+	lateEventGracePeriod     = 30 * time.Second
 )
 
 type CaptureConfig struct {

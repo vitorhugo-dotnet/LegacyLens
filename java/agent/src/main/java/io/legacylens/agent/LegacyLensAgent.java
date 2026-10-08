@@ -6,6 +6,7 @@ import io.legacylens.agent.instrumentation.FacesAdvice;
 import io.legacylens.agent.instrumentation.PrepareStatementAdvice;
 import io.legacylens.agent.instrumentation.PreparedStatementAdvice;
 import io.legacylens.agent.instrumentation.ServletAdvice;
+import io.legacylens.agent.instrumentation.AsyncAdvice;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
 import net.bytebuddy.jar.asm.ClassReader;
@@ -20,6 +21,7 @@ import java.nio.file.Files;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.jar.JarEntry;
@@ -33,6 +35,7 @@ public final class LegacyLensAgent {
     private static volatile boolean installed;
     private static JarFile bootstrapBridgeJar;
     private static final String BRIDGE_NAME = "io.legacylens.agent.bridge.AgentBridge";
+    private static final String BRIDGE_PACKAGE = "io.legacylens.agent.bridge";
     private static final ThreadLocal<Integer> jdbcDepth = new ThreadLocal<Integer>();
     private static final Map<Object, String> preparedSql = Collections.synchronizedMap(new WeakHashMap<Object, String>());
 
@@ -40,6 +43,7 @@ public final class LegacyLensAgent {
 
     public static void premain(String options, Instrumentation instrumentation) {
         try {
+            exposeBootstrapBridgeToJbossModules();
             config = AgentConfig.load(options);
             transport = AgentTransport.start(config);
             install(instrumentation, config);
@@ -47,6 +51,16 @@ public final class LegacyLensAgent {
         } catch (Exception failure) {
             System.err.println("LegacyLens agent configuration failed: " + failure.getClass().getSimpleName());
         }
+    }
+
+    private static void exposeBootstrapBridgeToJbossModules() {
+        String configured = System.getProperty("jboss.modules.system.pkgs", "");
+        for (String packageName : configured.split(",")) {
+            if (BRIDGE_PACKAGE.equals(packageName.trim())) return;
+        }
+        String updated = configured.trim();
+        System.setProperty("jboss.modules.system.pkgs", updated.isEmpty()
+                ? BRIDGE_PACKAGE : updated + "," + BRIDGE_PACKAGE);
     }
 
     static synchronized void installForTesting(Instrumentation instrumentation, AgentTransport testTransport, AgentConfig testConfig) {
@@ -64,6 +78,10 @@ public final class LegacyLensAgent {
 
     private static void install(Instrumentation instrumentation, final AgentConfig agentConfig) throws Exception {
         installBootstrapBridge(instrumentation);
+        new AgentBuilder.Default().ignore(nameStartsWith("net.bytebuddy."))
+          .type(named("java.util.concurrent.ThreadPoolExecutor"))
+          .transform((builder, type, loader, module, protectionDomain) -> builder.visit(Advice.to(AsyncAdvice.class).on(named("execute").and(takesArguments(Runnable.class)))))
+          .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION).installOn(instrumentation);
         new AgentBuilder.Default().ignore(nameStartsWith("io.legacylens.agent.").or(nameStartsWith("net.bytebuddy.")).or(nameStartsWith("java.")))
           .type(hasSuperType(named("javax.servlet.Servlet")).or(hasSuperType(named("jakarta.servlet.Servlet"))))
           .transform((builder, type, loader, module, protectionDomain) -> builder.visit(Advice.to(ServletAdvice.class).on(named("service").and(takesArguments(2)))))
@@ -141,6 +159,28 @@ public final class LegacyLensAgent {
             AgentTransport currentTransport = transport;
             if (ended != null && ended.state != null && currentTransport != null) currentTransport.releaseTrace(ended.state);
         }
+    }
+
+    public static Runnable wrapRunnableForAsync(final Runnable task) {
+        if(task instanceof CapturedRunnable)return task;
+        final TraceContext snapshot=TraceContext.snapshot();
+        if(snapshot==null)return task;
+        final AgentTransport currentTransport=transport;
+        AgentConfig currentConfig=config;
+        if(currentTransport==null || currentTransport.acquireTrace(snapshot.traceId,currentConfig==null?null:currentConfig.producerId)==null)return task;
+        return new CapturedRunnable(task,snapshot,currentTransport);
+    }
+
+    public static void discardAsyncRunnable(Runnable task) { if(task instanceof CapturedRunnable)((CapturedRunnable)task).release(); }
+
+    private static final class CapturedRunnable implements Runnable {
+        private final Runnable task;
+        private final TraceContext context;
+        private final AgentTransport owner;
+        private final AtomicBoolean released=new AtomicBoolean();
+        CapturedRunnable(Runnable task,TraceContext context,AgentTransport owner){this.task=task;this.context=context;this.owner=owner;}
+        public void run(){TraceContext.install(context);try{task.run();}finally{TraceContext.end();release();}}
+        void release(){if(released.compareAndSet(false,true))owner.releaseTrace(context.state);}
     }
 
     public static boolean endpointEnter(Class<?> endpoint) {

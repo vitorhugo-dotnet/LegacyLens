@@ -18,6 +18,8 @@ public final class TraceContext {
     static void popEvent(){TraceContext c=current();if(c!=null&&!c.eventStack.isEmpty())c.eventStack.pop();}
     static String parentEventId(){TraceContext c=current();return c==null?null:c.currentEventId();}
     private String currentEventId(){return eventStack.isEmpty()?inheritedParentEventId:eventStack.peek();}
+    static TraceContext snapshot(){TraceContext current=current();return current==null?null:new TraceContext(current.traceId,hex(8),current.spanId,current.currentEventId(),current.state);}
+    static void install(TraceContext context){if(context==null)return;Deque<TraceContext>d=CURRENT.get();if(d==null){d=new ArrayDeque<TraceContext>();CURRENT.set(d);}d.push(context);}
     static TraceContext end(){Deque<TraceContext>d=CURRENT.get();if(d==null)return null;TraceContext c=d.isEmpty()?null:d.pop();if(d.isEmpty())CURRENT.remove();return c;}
     static String hex(int bytes){byte[] b=new byte[bytes];do { RANDOM.nextBytes(b); } while(allZero(b));StringBuilder s=new StringBuilder();for(byte v:b)s.append(String.format("%02x",v&255));return s.toString();}
     private static boolean allZero(byte[] b){for(byte value:b)if(value!=0)return false;return true;}

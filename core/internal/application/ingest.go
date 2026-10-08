@@ -50,12 +50,17 @@ func (s *CaptureService) Ingest(ctx context.Context, events []domain.Event) (Ing
 		if current.Trace.ID != traceID || current.Trace.ProjectID != projectID {
 			return IngestResult{}, errors.New("capture session not found")
 		}
-		if current.Trace.EndedAt != nil || current.Trace.Incomplete {
+		now := s.config.Now().UTC()
+		if current.Trace.Incomplete {
 			total.Diagnostics = append(total.Diagnostics, makeDiagnostic("capture.closed", "Capture session is closed.", s.config.Now()))
 			continue
 		}
-		now := s.config.Now().UTC()
-		if !now.Before(current.Trace.StartedAt.Add(s.config.MaxDuration)) {
+		late := current.Trace.EndedAt != nil
+		if late && now.After(current.Trace.EndedAt.Add(lateEventGracePeriod)) {
+			total.Diagnostics = append(total.Diagnostics, makeDiagnostic("capture.closed", "Capture session is closed.", now))
+			continue
+		}
+		if !late && !now.Before(current.Trace.StartedAt.Add(s.config.MaxDuration)) {
 			diagnostic := makeDiagnostic("capture.expired", "Capture session expired before these events arrived.", now)
 			if err := s.store.MarkCaptureIncomplete(ctx, projectID, traceID, diagnostic); err != nil {
 				return total, err
@@ -71,8 +76,13 @@ func (s *CaptureService) Ingest(ctx context.Context, events []domain.Event) (Ing
 		acceptedBatch := make([]domain.Event, 0, len(batch))
 		sanitizationDiagnostics := make([]domain.Diagnostic, 0)
 		batchDuplicates := 0
+		lateRejected := false
 		limitReached := false
 		for _, event := range batch {
+			if late && event.OccurredAt.After(*current.Trace.EndedAt) {
+				lateRejected = true
+				continue
+			}
 			if seen[eventIdentity(event)] {
 				batchDuplicates++
 				continue
@@ -90,6 +100,12 @@ func (s *CaptureService) Ingest(ctx context.Context, events []domain.Event) (Ing
 			sanitizationDiagnostics = append(sanitizationDiagnostics, diagnostics...)
 			acceptedBatch = append(acceptedBatch, event)
 			remaining--
+		}
+		if lateRejected {
+			total.Diagnostics = append(total.Diagnostics, makeDiagnostic("capture.closed", "Events that occurred after capture ended were ignored.", now))
+		}
+		if len(acceptedBatch) == 0 && lateRejected {
+			continue
 		}
 		result, err := s.store.AppendBounded(ctx, acceptedBatch, s.config.MaxEvents, sanitizationDiagnostics)
 		if err != nil {

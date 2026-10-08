@@ -52,6 +52,25 @@ describe('async interaction context', () => {
     } finally { uninstall(); globalThis.Element = previousElement; }
   });
 
+  it('keeps the selected click armed until its matching click task arrives', () => {
+    vi.useFakeTimers();
+    const previousElement = globalThis.Element;
+    class FakeElement extends EventTarget { id = 'save'; closest() { return { id: this.id }; } }
+    globalThis.Element = FakeElement as unknown as typeof Element;
+    const uninstall = installAsyncContextCapture();
+    try {
+      const button = new FakeElement();
+      const seen: string[] = [];
+      button.addEventListener('click', () => seen.push(currentInteraction()?.source ?? 'unlinked'));
+      armInteraction(interaction('save'));
+      vi.advanceTimersByTime(0);
+      button.dispatchEvent(new Event('click'));
+      vi.advanceTimersByTime(0);
+      button.dispatchEvent(new Event('click'));
+      expect(seen).toEqual(['save', 'unlinked']);
+    } finally { uninstall(); globalThis.Element = previousElement; }
+  });
+
   it('keeps the selected click armed across a microtask checkpoint during the same click task', async () => {
     const previousElement = globalThis.Element;
     class FakeElement extends EventTarget { id = 'save'; closest() { return { id: this.id }; } }

@@ -9,6 +9,7 @@ let active: InteractionContext | undefined;
 let armed: InteractionContext | undefined;
 let observing = 0;
 let restoreInline: (() => void) | undefined;
+let clearArmed: (() => void) | undefined;
 
 export function currentInteraction(): InteractionContext | undefined { return observing ? undefined : active; }
 
@@ -35,21 +36,32 @@ export function bindInteraction<T extends (...args: any[]) => any>(fn: T, contex
 export function armInteraction(context: InteractionContext): void {
   restoreInline?.();
   armed = context;
+  let resetScheduled = false;
+  let restore: (() => void) | undefined;
+  const clearAfterClick = () => {
+    if (resetScheduled) return;
+    resetScheduled = true;
+    setTimeout(() => {
+      if (armed === context) armed = undefined;
+      restore?.();
+      if (clearArmed === clearAfterClick) clearArmed = undefined;
+    }, 0);
+  };
+  clearArmed = clearAfterClick;
   const element = typeof document === 'undefined' ? null : document.getElementById(context.source);
   const original = element?.onclick;
   if (element && typeof original === 'function') {
     const wrapped = function (this: GlobalEventHandlers, event: MouseEvent) {
+      clearAfterClick();
       return withInteraction(context, () => Reflect.apply(original, this, [event]));
     };
     element.onclick = wrapped;
-    const restore = () => {
+    restore = () => {
       if (element.onclick === wrapped) element.onclick = original;
       if (restoreInline === restore) restoreInline = undefined;
     };
     restoreInline = restore;
   }
-  const restore = restoreInline;
-  setTimeout(() => { if (armed === context) armed = undefined; restore?.(); }, 0);
 }
 
 export function installAsyncContextCapture(): () => void {
@@ -89,6 +101,7 @@ export function installAsyncContextCapture(): () => void {
       }
       const selected = enabled && type === 'click' && armed && typeof Element !== 'undefined' && event.target instanceof Element
         && event.target.closest('[id]')?.id === armed.source ? armed : undefined;
+      if (selected) clearArmed?.();
       // Registration alone does not make a later, independently dispatched event a child.
       const context = enabled ? selected ?? active : undefined;
       const invoke = () => typeof listener === 'function'
@@ -120,6 +133,7 @@ export function installAsyncContextCapture(): () => void {
   return () => {
     enabled = false;
     armed = undefined;
+    clearArmed = undefined;
     restoreInline?.();
     if (globalThis.setTimeout !== originalTimeout) globalThis.setTimeout = originalTimeout;
     if (globalThis.setInterval !== originalInterval) globalThis.setInterval = originalInterval;

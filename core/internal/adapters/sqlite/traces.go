@@ -93,8 +93,19 @@ func (s *Store) AppendBounded(ctx context.Context, events []domain.Event, eventL
 	if err := tx.QueryRowContext(ctx, `SELECT ended_at,incomplete FROM traces WHERE project_id=? AND id=?`, projectID, traceID).Scan(&ended, &incomplete); err != nil {
 		return result, err
 	}
-	if ended.Valid || incomplete != 0 {
+	if incomplete != 0 {
 		return result, errors.New("capture session is closed")
+	}
+	if ended.Valid {
+		endedAt, parseErr := time.Parse(time.RFC3339Nano, ended.String)
+		if parseErr != nil {
+			return result, parseErr
+		}
+		for _, event := range events {
+			if event.OccurredAt.After(endedAt) {
+				return result, errors.New("event occurred after capture ended")
+			}
+		}
 	}
 	for _, diagnostic := range diagnostics {
 		if err := insertTraceDiagnostic(ctx, tx, projectID, traceID, diagnostic); err != nil {

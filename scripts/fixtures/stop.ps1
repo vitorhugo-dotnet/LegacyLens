@@ -46,7 +46,10 @@ if ($state.runtime -and $state.fixtureId -match '^legacylens-fixture-[0-9a-f]{12
     try { Remove-Item -LiteralPath $expected -ErrorAction Stop } catch { }
   }
 }
-$expectedMysqlData = Join-Path $cache 'mysql-data'
-if ($state.mysqlData -and [IO.Path]::GetFullPath([string]$state.mysqlData) -eq [IO.Path]::GetFullPath($expectedMysqlData) -and !(Get-CimInstance Win32_Process -Filter "ProcessId=$($state.mysqlPid)" -ErrorAction SilentlyContinue)) {
-  Remove-Item -LiteralPath $expectedMysqlData -Recurse -Force -ErrorAction SilentlyContinue
+$expectedCache = [IO.Path]::GetFullPath($cache) + [IO.Path]::DirectorySeparatorChar
+if ($state.mysqlData) {
+  $expectedMysqlData = [IO.Path]::GetFullPath([string]$state.mysqlData)
+  if ($expectedMysqlData.StartsWith($expectedCache,[StringComparison]::OrdinalIgnoreCase) -and (Split-Path -Leaf $expectedMysqlData) -match '^mysql-data-[0-9a-f]{12}$' -and !(Get-CimInstance Win32_Process -Filter "ProcessId=$($state.mysqlPid)" -ErrorAction SilentlyContinue)) {
+    Remove-Item -LiteralPath $expectedMysqlData -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }

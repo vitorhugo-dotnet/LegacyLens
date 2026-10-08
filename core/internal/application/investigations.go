@@ -152,7 +152,7 @@ func (s *InvestigationService) Get(ctx context.Context, projectID, traceID domai
 		if from == "" || to == "" { continue }
 		value.Relations = append(value.Relations,domain.Relation{ID:stableID("http.request",string(projectID),string(traceID),span),FromID:from,ToID:&to,Kind:"http.request",EvidenceIDs:[]domain.ID{from,to},Resolution:domain.ResolutionResolved,Layer:domain.LayerObserved})
 	}
-	return value, nil
+	return reconcileInvestigation(ctx, projectID, traceID, value)
 }
 
 func validRequestSpan(span string) bool {

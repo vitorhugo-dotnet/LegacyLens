@@ -26,9 +26,9 @@ $jdk = Join-Path $jdkDir 'jdk8u462-b08'
 $wildfly = Join-Path $wildDir 'wildfly-10.0.0.Final'
 if (!(Test-Path (Join-Path $jdk 'bin\java.exe')) -or !(Test-Path (Join-Path $wildfly 'bin\standalone.bat')) -or !(Test-Path (Join-Path $mysqlDir 'mysql-5.7.44-winx64\bin\mysqld.exe'))) { throw 'Pinned Java, WildFly, or MySQL archive is incomplete.' }
 $env:JAVA_HOME = $jdk
-& mvn -q -f (Join-Path $root 'fixtures\legacy\pom.xml') package
+& mvn -q -f (Join-Path $root 'fixtures\legacy\pom.xml') clean package
 if ($LASTEXITCODE -ne 0) { throw 'Legacy WAR build failed.' }
-& mvn -q -f (Join-Path $root 'java\pom.xml') -pl agent -am '-DskipTests' package
+& mvn -q -f (Join-Path $root 'java\pom.xml') -pl agent -am '-DskipTests' clean package
 if ($LASTEXITCODE -ne 0) { throw 'Java agent build failed.' }
 & go -C (Join-Path $root 'core') build -o (Join-Path $cache 'legacylens.exe') ./cmd/legacylens
 if ($LASTEXITCODE -ne 0) { throw 'Core build failed.' }
@@ -41,23 +41,25 @@ $runtime = Join-Path $env:TEMP $fixtureId
 New-Item -ItemType Directory -Path $runtime | Out-Null
 $schema = Join-Path $root 'fixtures\legacy\sql\schema.sql'
 $mysqlHome = Join-Path $mysqlDir 'mysql-5.7.44-winx64'
-$mysqlData = Join-Path $cache 'mysql-data'
+$mysqlData = Join-Path $cache ('mysql-data-' + [guid]::NewGuid().ToString('N').Substring(0,12))
 $mysqld = Join-Path $mysqlHome 'bin\mysqld.exe'
 $mysql = Join-Path $mysqlHome 'bin\mysql.exe'
 $mysqladmin = Join-Path $mysqlHome 'bin\mysqladmin.exe'
 try {
+  $state = @{ fixtureId=$fixtureId; runtime=$runtime; mysqlData=$mysqlData; mysqlPort=$MySqlPort }
+  $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
   New-Item -ItemType Directory -Force -Path $mysqlData | Out-Null
-  & $mysqld --no-defaults --initialize-insecure "--basedir=$mysqlHome" "--datadir=$mysqlData" --console
+  & $mysqld --no-defaults --initialize-insecure --log_syslog=0 "--basedir=$mysqlHome" "--datadir=$mysqlData" --console
   if ($LASTEXITCODE -ne 0) { throw 'MySQL data directory initialization failed.' }
   $mysqlArguments = @('--no-defaults',"--basedir=`"$mysqlHome`"","--datadir=`"$mysqlData`"","--port=$MySqlPort",'--bind-address=127.0.0.1','--console')
   $mysqlProcess = Start-Process -FilePath $mysqld -ArgumentList $mysqlArguments -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $cache 'mysql-out.log') -RedirectStandardError (Join-Path $cache 'mysql-err.log')
-  $state = @{ fixtureId=$fixtureId; runtime=$runtime; mysqlPid=$mysqlProcess.Id; mysqlPath=$mysqld; mysqlData=$mysqlData; mysqlPort=$MySqlPort }
+  $state.mysqlPid=$mysqlProcess.Id; $state.mysqlPath=$mysqld
   $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
   $mysqlConnection = @('--no-defaults','--protocol=tcp','--host=127.0.0.1',"--port=$MySqlPort",'--user=root')
   $mysqlReady = $false
   for ($i=0; $i -lt 90; $i++) {
     if ($mysqlProcess.HasExited) { throw 'MySQL server exited during startup.' }
-    & $mysqladmin @mysqlConnection ping 2>$null | Out-Null
+    & $mysql @mysqlConnection --execute='SELECT 1' 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { $mysqlReady = $true; break }
     Start-Sleep -Seconds 1
   }
@@ -83,6 +85,10 @@ try {
   $env:APPDATA = $cache
   if ($ExtensionId) { $env:LEGACYLENS_EXTENSION_ID = $ExtensionId }
   $corePath = Join-Path $cache 'legacylens.exe'
+  $project = & $corePath project register --root (Join-Path $root 'fixtures\legacy') --name 'Legacy fixture' | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0 -or !$project.projectId) { throw 'Fixture project registration failed.' }
+  $state.projectId=$project.projectId
+  $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
   $foreign = Get-CimInstance Win32_Process -Filter "name='legacylens.exe'" | Where-Object ExecutablePath -eq $corePath
   if ($foreign) { throw 'Fixture core executable is already running without this fixture state.' }
   $discoveryPath = Join-Path $cache 'LegacyLens\discovery.json'
@@ -92,8 +98,6 @@ try {
   $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
   for ($i=0; $i -lt 100 -and !(Test-Path $discoveryPath); $i++) { Start-Sleep -Milliseconds 100 }
   if (!(Test-Path $discoveryPath)) { throw 'Core discovery was not created.' }
-  $project = & (Join-Path $cache 'legacylens.exe') project register --root (Join-Path $root 'fixtures\legacy') --name 'Legacy fixture' | ConvertFrom-Json
-  if ($LASTEXITCODE -ne 0 -or !$project.projectId) { throw 'Fixture project registration failed.' }
   $discovery = Get-Content -Raw $discoveryPath | ConvertFrom-Json
   $apiPort = [int]($discovery.address -split ':')[-1]
   $listener = Get-NetTCPConnection -OwningProcess $core.Id -LocalPort $apiPort -State Listen -ErrorAction SilentlyContinue
@@ -107,16 +111,64 @@ try {
   @("endpoint=http://$($discovery.address)/v1/events", "token=$($discovery.agentToken)", "projectId=$($project.projectId)", 'producerId=legacy-fixture', 'revision=fixture-1', 'packages=io.legacylens.fixture') | Set-Content -LiteralPath $configSource -Encoding ascii
   Copy-Item $configSource $agentConfig -Force
   if ((Get-FileHash $configSource -Algorithm SHA256).Hash -ne (Get-FileHash $agentConfig -Algorithm SHA256).Hash) { throw 'Copied agent config hash differs from generated config.' }
-  Copy-Item (Join-Path $root 'fixtures\legacy\target\legacy-fixture.war') (Join-Path $wildfly 'standalone\deployments\legacy-fixture.war') -Force
+  $fixtureDeployment = Join-Path $cache 'legacy-fixture.war'
+  Copy-Item (Join-Path $root 'fixtures\legacy\target\legacy-fixture.war') $fixtureDeployment -Force
+  $scannerDeployment = Join-Path $wildfly 'standalone\deployments\legacy-fixture.war'
+  Remove-Item -LiteralPath $scannerDeployment,($scannerDeployment + '.dodeploy'),($scannerDeployment + '.deployed'),($scannerDeployment + '.failed'),($scannerDeployment + '.isdeploying'),($scannerDeployment + '.isundeploying') -Force -ErrorAction SilentlyContinue
   $env:LEGACY_DB_PASSWORD = 'fixture-only-password'
   $env:LEGACY_DB_URL = "jdbc:mysql://127.0.0.1:$MySqlPort/legacy?useSSL=false"
-  $env:JAVA_OPTS = '-Xms256m -Xmx512m -javaagent:"' + $agentJar + '"=config="' + $agentConfig + '"'
-  $wild = Start-Process -FilePath (Join-Path $wildfly 'bin\standalone.bat') -ArgumentList '-b','127.0.0.1',"-Djboss.http.port=$HttpPort" -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $cache 'wildfly-out.log') -RedirectStandardError (Join-Path $cache 'wildfly-err.log')
-  $state.wildflyPid=$wild.Id; $state.wildflyPath=(Join-Path $wildfly 'bin\standalone.bat'); $state.projectId=$project.projectId; $state.httpPort=$HttpPort
+  $wildflyJava = Join-Path $jdk 'bin\java.exe'
+  $wildflyArguments = @('-D[Standalone]','-server','-Xms256m','-Xmx512m','-Djava.net.preferIPv4Stack=true','-Djboss.modules.system.pkgs=org.jboss.byteman','-Djava.awt.headless=true',"-javaagent:`"$agentJar`"=config=`"$agentConfig`"", "-Dorg.jboss.boot.log.file=`"$(Join-Path $wildfly 'standalone\log\server.log')`"", "-Dlogging.configuration=`"file:$(Join-Path $wildfly 'standalone\configuration\logging.properties')`"",'-jar',"`"$(Join-Path $wildfly 'jboss-modules.jar')`"",'-mp',"`"$(Join-Path $wildfly 'modules')`"",'org.jboss.as.standalone',"-Djboss.home.dir=`"$wildfly`"", "-Djboss.server.base.dir=`"$(Join-Path $wildfly 'standalone')`"",'-b','127.0.0.1',"-Djboss.http.port=$HttpPort")
+  $wildflyStart = New-Object System.Diagnostics.ProcessStartInfo
+  $wildflyStart.FileName = $wildflyJava
+  $wildflyStart.Arguments = $wildflyArguments -join ' '
+  $wildflyStart.WorkingDirectory = $wildfly
+  $wildflyStart.UseShellExecute = $false
+  $wildflyStart.CreateNoWindow = $true
+  $wildflyStart.RedirectStandardOutput = $true
+  $wildflyStart.RedirectStandardError = $true
+  $wild = New-Object System.Diagnostics.Process
+  $wild.StartInfo = $wildflyStart
+  if (!$wild.Start()) { throw 'WildFly JVM could not be started.' }
+  $wildflyStdout = $wild.StandardOutput.ReadToEndAsync()
+  $wildflyStderr = $wild.StandardError.ReadToEndAsync()
+  $state.wildflyPid=$wild.Id; $state.wildflyPath=$wildflyJava; $state.projectId=$project.projectId; $state.httpPort=$HttpPort
   $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
+  $cli = Join-Path $wildfly 'bin\jboss-cli.bat'
+  $managementReady = $false
+  for ($i=0; $i -lt 120; $i++) {
+    if ($wild.HasExited) {
+      $startupOutput = @($wildflyStdout.GetAwaiter().GetResult(),$wildflyStderr.GetAwaiter().GetResult()) -join "`n"
+      $startupErrors = @($startupOutput -split "`r?`n" | Where-Object { $_ -match '(?i)error|exception|failed|could not|invalid|usage:' } | Select-Object -Last 8)
+      throw "WildFly JVM exited during startup with code $($wild.ExitCode): $($startupErrors -join ' | ')"
+    }
+    $managementState = & $cli --connect --controller=127.0.0.1:9990 '--command=:read-attribute(name=server-state)' 2>&1
+    if ($LASTEXITCODE -eq 0 -and ($managementState -join ' ') -match 'running') { $managementReady = $true; break }
+    Start-Sleep -Seconds 1
+  }
+  if (!$managementReady) { throw 'WildFly management readiness failed; inspect sanitized logs in .fixture-cache.' }
+  $cli = Join-Path $wildfly 'bin\jboss-cli.bat'
+  @('deploy "' + $fixtureDeployment + '" --name=legacy-fixture.war --force') | Set-Content -LiteralPath (Join-Path $cache 'deploy-fixture.cli') -Encoding ascii
+  Push-Location $cache
+  try { $deploymentOutput = & $cli --connect --controller=127.0.0.1:9990 --file=deploy-fixture.cli 2>&1; $deploymentExit = $LASTEXITCODE }
+  finally { Pop-Location }
+  if ($deploymentExit -ne 0) { throw ('WildFly fixture redeploy failed: ' + ($deploymentOutput -join ' ')) }
+  $deploymentContent = & $cli --connect --controller=127.0.0.1:9990 '--command=/deployment=legacy-fixture.war:read-attribute(name=content)' 2>&1
+  if ($LASTEXITCODE -ne 0) { throw ('WildFly fixture content query failed: ' + ($deploymentContent -join ' ')) }
+  $expectedContentHash = (Get-FileHash -LiteralPath $fixtureDeployment -Algorithm SHA1).Hash.ToLowerInvariant()
+  $actualContentHash = -join ([regex]::Matches(($deploymentContent -join "`n"), '0x([0-9a-fA-F]{2})') | ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() })
+  if ($actualContentHash -ne $expectedContentHash) { throw "WildFly deployment content hash mismatch; expected=$expectedContentHash actual=$actualContentHash output=$($deploymentContent -join ' ')" }
   $url = "http://127.0.0.1:$HttpPort/legacy-fixture/orders.xhtml"
   $ready = $false
-  for ($i=0; $i -lt 120; $i++) { try { $response = Invoke-WebRequest -Uri $url -TimeoutSec 2; if ($response.StatusCode -eq 200 -and $response.Content -match 'orderForm:saveOrder') { $ready=$true; break } } catch {}; Start-Sleep -Seconds 1 }
+  for ($i=0; $i -lt 120; $i++) {
+    if ($wild.HasExited) {
+      $startupOutput = @($wildflyStdout.GetAwaiter().GetResult(),$wildflyStderr.GetAwaiter().GetResult()) -join "`n"
+      $startupErrors = @($startupOutput -split "`r?`n" | Where-Object { $_ -match '(?i)error|exception|failed|could not|invalid|usage:' } | Select-Object -Last 8)
+      throw "WildFly JVM exited during startup with code $($wild.ExitCode): $($startupErrors -join ' | ')"
+    }
+    try { $response = Invoke-WebRequest -Uri $url -TimeoutSec 2; if ($response.StatusCode -eq 200 -and $response.Content -match 'orderForm:saveOrder') { $ready=$true; break } } catch {}
+    Start-Sleep -Seconds 1
+  }
   if (!$ready) { throw 'WildFly fixture readiness failed; inspect sanitized logs in .fixture-cache.' }
   [pscustomobject]@{ url=$url; projectId=$project.projectId; status='ready' }
 } catch {

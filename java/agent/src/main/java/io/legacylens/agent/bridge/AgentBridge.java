@@ -17,6 +17,8 @@ public final class AgentBridge {
     private static volatile Method endpointExit;
     private static volatile Method facesActionEnter;
     private static volatile Method facesActionExit;
+    private static volatile Method wrapRunnable;
+    private static volatile Method discardRunnable;
 
     private AgentBridge() { }
 
@@ -33,6 +35,8 @@ public final class AgentBridge {
         endpointExit = agent.getMethod("endpointExit", Throwable.class);
         facesActionEnter = agent.getMethod("facesActionEnter", Class.class, String.class);
         facesActionExit = agent.getMethod("facesActionExit", Class.class, String.class, Throwable.class);
+        wrapRunnable = agent.getMethod("wrapRunnableForAsync", Runnable.class);
+        discardRunnable = agent.getMethod("discardAsyncRunnable", Runnable.class);
     }
 
     public static boolean servletEnter(Object request) { return booleanResult(call(servletEnter, request)); }
@@ -47,6 +51,8 @@ public final class AgentBridge {
     public static void endpointExit(Throwable thrown) { call(endpointExit, thrown); }
     public static boolean facesActionEnter(Class<?> listener, String method) { return booleanResult(call(facesActionEnter, listener, method)); }
     public static void facesActionExit(Class<?> listener, String method, Throwable thrown) { call(facesActionExit, listener, method, thrown); }
+    public static Runnable wrapRunnable(Runnable task) { Object wrapped = call(wrapRunnable, task); return wrapped instanceof Runnable ? (Runnable) wrapped : task; }
+    public static void discardRunnable(Runnable task) { call(discardRunnable, task); }
 
     private static Object call(Method method, Object... arguments) {
         if (method == null) return null;

@@ -20,7 +20,10 @@ var (
 	javaDeployment    = regexp.MustCompile(`^[A-Za-z0-9_$.-]{1,128}@loader-[a-fA-F0-9]{1,16}$`)
 	javaLine          = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 	agentDroppedCount = regexp.MustCompile(`^[1-9][0-9]{0,17}$`)
+	agentThreadID      = regexp.MustCompile(`^[1-9][0-9]{0,17}$`)
 	requestSpan = regexp.MustCompile(`^[0-9a-f]{16}$`)
+	browserFrameName = regexp.MustCompile(`^[A-Za-z0-9_$<>. -]{1,64}$`)
+	browserFrameFile = regexp.MustCompile(`^[a-zA-Z][A-Za-z0-9_.-]{0,63}\.js$`)
 )
 
 // SanitizeMetadata keeps only low-risk, structured request and database metadata.
@@ -32,7 +35,9 @@ func SanitizeMetadata(input map[string]string) (map[string]string, []Diagnostic)
 		"code.class": true, "code.method": true, "code.descriptor": true,
 		"code.deployment": true, "code.line": true, "code.line_missing": true,
 		"agent.dropped_count": true,
+		"agent.thread_id": true,
 		"spanId": true, "http.request_span": true,
+		"frameChain": true, "stackGap": true,
 	}
 	clean := make(map[string]string)
 	dropped := make([]string, 0)
@@ -62,6 +67,23 @@ func validMetadataValue(key, value string) bool {
 		return validStructuredMetadata(key, value)
 	}
 	if key == "spanId" || key == "http.request_span" { return requestSpan.MatchString(value) && value != "0000000000000000" }
+	if key == "agent.thread_id" { return agentThreadID.MatchString(value) }
+	if key == "stackGap" {
+		return value == "STACK_UNAVAILABLE" || value == "ASYNC_BOUNDARY" || value == "ASYNC_BOUNDARY,STACK_UNAVAILABLE"
+	}
+	if key == "frameChain" {
+		for _, frame := range strings.Split(value, ">") {
+			parts := strings.Split(frame, "@")
+			if len(parts) != 2 || !browserFrameName.MatchString(parts[0]) {
+				return false
+			}
+			identity := strings.Split(parts[1], ":")
+			if len(identity) != 2 || !browserFrameFile.MatchString(identity[0]) || !javaLine.MatchString(identity[1]) {
+				return false
+			}
+		}
+		return true
+	}
 	return safeMetadataValue.MatchString(value)
 }
 

@@ -112,6 +112,45 @@ func TestIngestRejectsEmptyEventKindBeforePersistence(t *testing.T) {
 	}
 }
 
+func TestIngestAcceptsOnlyRecentPreStopEventsAfterCaptureStops(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	store := &memoryCaptureStore{projects: map[domain.ID]domain.Project{"p": {ID: "p"}}, traces: map[domain.ID]domain.Trace{}, events: map[domain.ID][]domain.Event{}}
+	service := NewCaptureService(store, CaptureConfig{Now: func() time.Time { return now }})
+	session, err := service.Start(context.Background(), CaptureRequest{ProjectID: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Second)
+	if err := service.Stop(context.Background(), "p", session.ID); err != nil {
+		t.Fatal(err)
+	}
+	endedAt := *store.traces[session.ID].EndedAt
+
+	lateAgentEvent := domain.Event{ProjectID: "p", TraceID: session.ID, ProducerID: "agent", Sequence: 1, EventID: "in-flight", OccurredAt: endedAt.Add(-time.Second), Kind: "method.start"}
+	now = endedAt.Add(lateEventGracePeriod)
+	result, err := service.Ingest(context.Background(), []domain.Event{lateAgentEvent})
+	if err != nil || result.Accepted != 1 {
+		t.Fatalf("event from before stop should be accepted within the grace period: result=%#v err=%v", result, err)
+	}
+
+	afterStopEvent := lateAgentEvent
+	afterStopEvent.Sequence = 2
+	afterStopEvent.EventID = "after-stop"
+	afterStopEvent.OccurredAt = endedAt.Add(time.Nanosecond)
+	result, err = service.Ingest(context.Background(), []domain.Event{afterStopEvent})
+	if err != nil || result.Accepted != 0 || len(result.Diagnostics) == 0 {
+		t.Fatalf("event that occurred after stop must be ignored: result=%#v err=%v", result, err)
+	}
+
+	now = endedAt.Add(lateEventGracePeriod + time.Nanosecond)
+	lateAgentEvent.Sequence = 3
+	lateAgentEvent.EventID = "outside-grace"
+	result, err = service.Ingest(context.Background(), []domain.Event{lateAgentEvent})
+	if err != nil || result.Accepted != 0 || len(result.Diagnostics) == 0 {
+		t.Fatalf("late event outside the grace period must be ignored: result=%#v err=%v", result, err)
+	}
+}
+
 func TestCaptureServiceLoadsInvestigationForProjectAndTrace(t *testing.T) {
 	store := &memoryCaptureStore{projects: map[domain.ID]domain.Project{"p": {ID: "p"}}, traces: map[domain.ID]domain.Trace{"t": {ID: "t", ProjectID: "p"}}, events: map[domain.ID][]domain.Event{"t": {{ProjectID: "p", TraceID: "t", EventID: "e"}}}}
 	service := NewCaptureService(store, CaptureConfig{})

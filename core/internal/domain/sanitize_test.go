@@ -51,6 +51,31 @@ func TestSanitizeRequestSpanRequiresNonzeroLowerHexAndDropsSecrets(t *testing.T)
  }
 }
 
+func TestSanitizeMetadataKeepsBoundedBrowserStackEvidence(t *testing.T) {
+	input := map[string]string{
+		"frameChain": "saveOrder@orders.js:42>submit@orders.js:18",
+		"stackGap":   "ASYNC_BOUNDARY,STACK_UNAVAILABLE",
+	}
+	clean, diagnostics := SanitizeMetadata(input)
+	for key, value := range input {
+		if clean[key] != value {
+			t.Fatalf("browser stack evidence %q was lost: %#v", key, clean)
+		}
+	}
+	if len(diagnostics) != 0 {
+		t.Fatalf("approved browser stack evidence should not create a removal diagnostic: %#v", diagnostics)
+	}
+	for _, unsafe := range []map[string]string{
+		{"frameChain": strings.Repeat("x", 513)},
+		{"stackGap": "raw stack at https://example.test/private.js"},
+	} {
+		clean, diagnostics = SanitizeMetadata(unsafe)
+		if len(clean) != 0 || len(diagnostics) == 0 {
+			t.Fatalf("unsafe browser stack evidence should be removed: %#v", clean)
+		}
+	}
+}
+
 func TestSanitizeMetadataKeepsStructuredJavaMethodIdentity(t *testing.T) {
 	input := map[string]string{
 		"code.class":        "com.example.OrderService",
@@ -80,5 +105,21 @@ func TestSanitizeMetadataKeepsStructuredJavaMethodIdentity(t *testing.T) {
 	line, _ := SanitizeMetadata(map[string]string{"code.class": "com.example.OrderService", "code.method": "loadOrder", "code.descriptor": "()V", "code.deployment": "deployment@loader-19af", "code.line": "42"})
 	if line["code.line"] != "42" {
 		t.Fatalf("valid bytecode debug line was lost: %#v", line)
+	}
+}
+
+func TestSanitizeMetadataKeepsNumericAgentThreadIdentity(t *testing.T) {
+	clean, diagnostics := SanitizeMetadata(map[string]string{"agent.thread_id": "42", "agent.thread_name": "sensitive"})
+	if clean["agent.thread_id"] != "42" {
+		t.Fatalf("numeric agent thread identity was lost: %#v", clean)
+	}
+	if _, ok := clean["agent.thread_name"]; ok || len(diagnostics) == 0 {
+		t.Fatalf("unapproved thread metadata should be removed with a diagnostic: %#v", clean)
+	}
+	for _, invalid := range []string{"0", "-1", "thread-1"} {
+		clean, _ = SanitizeMetadata(map[string]string{"agent.thread_id": invalid})
+		if _, ok := clean["agent.thread_id"]; ok {
+			t.Fatalf("invalid agent thread identity %q was retained", invalid)
+		}
 	}
 }
