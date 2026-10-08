@@ -88,6 +88,16 @@ function removeAllMenus(): Promise<void> {
   });
 }
 
+function removeMenu(id: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chrome.contextMenus.remove(id, () => {
+      const error = chrome.runtime.lastError;
+      if (error) reject(new Error(error.message));
+      else resolve();
+    });
+  });
+}
+
 async function openInvestigation(projectId?: string, traceId?: string): Promise<void> {
   const url = new URL(chrome.runtime.getURL('investigation.html'));
   if (projectId) url.searchParams.set('projectId', projectId);
@@ -101,6 +111,15 @@ async function selectedProjectFor(tabId: number): Promise<string | undefined> {
 }
 
 async function renderMenu(tab?: chrome.tabs.Tab): Promise<void> {
+  // Show the submenu before contacting Native Messaging. A healthy HTTP core
+  // does not guarantee that the native host is installed or responding, and
+  // waiting for that request must never hide the entire context menu.
+  await removeAllMenus();
+  await createMenu({ id: rootMenuId, title: 'LegacyLens', contexts: ['page'], documentUrlPatterns: pagePatterns });
+  await createMenu({ id: statusMenuId, parentId: rootMenuId, title: 'Consultando host nativo…', enabled: false,
+    contexts: ['page'], documentUrlPatterns: pagePatterns });
+  await dynamicContextMenus.refresh?.();
+
   const tabId = tab?.id;
   const selectedId = tabId === undefined ? undefined : await selectedProjectFor(tabId);
   const active = tabId === undefined ? undefined : controller.get(tabId);
@@ -112,9 +131,8 @@ async function renderMenu(tab?: chrome.tabs.Tab): Promise<void> {
     hostError = true;
   }
 
-  await removeAllMenus();
+  await removeMenu(statusMenuId);
   const nextProjectMap = new Map<string, string>();
-  await createMenu({ id: rootMenuId, title: 'LegacyLens', contexts: ['page'], documentUrlPatterns: pagePatterns });
 
   if (hostError) {
     await createMenu({ id: statusMenuId, parentId: rootMenuId, title: 'Host nativo desconectado', enabled: false, contexts: ['page'], documentUrlPatterns: pagePatterns });
@@ -135,7 +153,7 @@ async function renderMenu(tab?: chrome.tabs.Tab): Promise<void> {
   await createMenu({ id: stopMenuId, parentId: rootMenuId, title: 'Parar captura', enabled: Boolean(active),
     contexts: ['page'], documentUrlPatterns: pagePatterns });
   await createMenu({ id: manageMenuId, parentId: rootMenuId, title: 'Gerenciar projetos', contexts: ['page'], documentUrlPatterns: pagePatterns });
-  // `removeAll` clears stale items across extension reloads; this map resolves this render's radio entries.
+  // `removeAll` at the start clears stale items across extension reloads; this map resolves this render's radio entries.
   projectMenuMap.clear();
   for (const [menuId, projectId] of nextProjectMap) projectMenuMap.set(menuId, projectId);
   // Chrome added refresh() later than the base contextMenus API. The menu is
