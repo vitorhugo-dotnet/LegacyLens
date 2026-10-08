@@ -56,6 +56,10 @@ const controller = new CaptureController(client, {
   async save(entries) { await chrome.storage.session.set({ [stateKey]: entries }); },
 }, recordDiagnostic);
 const capturePortsByTab = new Map<number, Set<() => void>>();
+const CAPTURE_OUTBOX_POLL_INTERVAL_MS = 250;
+let captureOutboxPollTimer: ReturnType<typeof setTimeout> | undefined;
+let captureOutboxPollRunning = false;
+let requestCaptureOutboxPoll = () => {};
 function closeCapturePorts(tabId: number): void {
   for (const close of capturePortsByTab.get(tabId) ?? []) close();
   capturePortsByTab.delete(tabId);
@@ -174,6 +178,7 @@ async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?
     }
     setFixturePhase('capture-start:pending');
     const session = await controller.start({ projectId, tabId, origin });
+    requestCaptureOutboxPoll();
     setFixturePhase('capture-start:complete');
     if (fixtureMode) console.info('LegacyLens fixture capture: capture.start completed');
     if (options.notifyContent !== false) {
@@ -275,6 +280,32 @@ export default defineBackground(() => {
     processingStorageRequests.set(key, processing);
     return processing;
   };
+  const scheduleCaptureOutboxPoll = (delay = 0): void => {
+    if (captureOutboxPollTimer || captureOutboxPollRunning) return;
+    captureOutboxPollTimer = globalThis.setTimeout(() => {
+      captureOutboxPollTimer = undefined;
+      void pollCaptureOutbox();
+    }, delay);
+  };
+  const pollCaptureOutbox = async (): Promise<void> => {
+    if (captureOutboxPollRunning) return;
+    captureOutboxPollRunning = true;
+    try {
+      if ((await controller.activeTabIds()).length) {
+        const stored = await chrome.storage.local.get(null);
+        await Promise.all(Object.entries(stored)
+          .filter(([key]) => key.startsWith(CAPTURE_TRANSPORT_STORAGE_PREFIX))
+          .map(([key, value]) => processStorageRequest(key, value)));
+      }
+    } catch (error) {
+      console.warn('LegacyLens capture outbox polling failed', error);
+    } finally {
+      captureOutboxPollRunning = false;
+      try { if ((await controller.activeTabIds()).length) scheduleCaptureOutboxPoll(CAPTURE_OUTBOX_POLL_INTERVAL_MS); }
+      catch (error) { console.warn('LegacyLens could not refresh capture outbox polling state', error); }
+    }
+  };
+  requestCaptureOutboxPoll = scheduleCaptureOutboxPoll;
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'local') return;
     for (const [key, change] of Object.entries(changes)) {
@@ -288,13 +319,12 @@ export default defineBackground(() => {
         .catch((error) => console.warn('LegacyLens capture outbox processing failed', error));
     }
   });
-  void chrome.storage.local.get(null).then((stored) => {
-    for (const [key, value] of Object.entries(stored)) {
-      if (key.startsWith(CAPTURE_TRANSPORT_STORAGE_PREFIX)) {
-        void processStorageRequest(key, value).catch((error) => console.warn('LegacyLens capture outbox recovery failed', error));
-      }
-    }
-  }).catch((error) => console.warn('LegacyLens could not recover capture outbox', error));
+  void chrome.storage.local.get(null).then((stored) => Promise.all(Object.entries(stored)
+    .filter(([key]) => key.startsWith(CAPTURE_TRANSPORT_STORAGE_PREFIX))
+    .map(([key, value]) => processStorageRequest(key, value))))
+    .then(() => controller.activeTabIds())
+    .then((tabIds) => { if (tabIds.length) scheduleCaptureOutboxPoll(CAPTURE_OUTBOX_POLL_INTERVAL_MS); })
+    .catch((error) => console.warn('LegacyLens could not recover capture outbox', error));
   chrome.runtime.onConnect.addListener((port) => {
     if (fixtureMode) {
       const debug = globalThis as FixtureDebugGlobal;

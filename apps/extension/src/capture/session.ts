@@ -45,6 +45,11 @@ export class CaptureController {
 
   get(tabId: number): ActiveCapture | undefined { return this.captures.get(tabId); }
 
+  async activeTabIds(): Promise<number[]> {
+    await this.restore();
+    return [...this.captures.keys()];
+  }
+
   async markGap(tabId: number): Promise<void> {
     await this.restore();
     const entry = this.captures.get(tabId);

@@ -25,6 +25,7 @@
 - Never accept a message fallback without validating sender tab, HTTP(S) origin, active session, and expiry; never ACK before host persistence.
 - Treat content-supplied tab/origin fields as claims: verify them against `chrome.tabs.get` before constructing the sender passed to shared validators.
 - Keep storage outbox envelopes small and correlated, recover pending envelopes at background startup, remove them after processing, and return replies only to the addressed tab.
+- Because the Windows fixture persists content writes but does not dispatch `storage.onChanged`, poll the outbox every 250 ms only while a capture is active; Native Messaging keeps the MV3 worker alive during that session.
 - Do not change the native host protocol or core deduplication key.
 
 ## Review Focus
@@ -204,4 +205,4 @@ Expected: all commands pass and all five E2E tests are discovered.
 
 Runs `37828772614` and `37829466099` showed zero calls to both the registered `runtime.onConnect` and `runtime.onMessage` listeners from the content script. The plan therefore keeps Port as the first attempt and replaces the fallback carrier with a `chrome.storage.local` outbox. Each request has a random correlated key and carries the tab ID, claimed origin, and capture envelope. The background re-reads the live tab through `chrome.tabs.get`, compares its HTTP(S) origin, then calls the existing handshake/event validators. It removes the outbox item and replies to that tab with `chrome.tabs.sendMessage`; startup recovery handles an item left by a worker restart. Event retries retain the same `eventId` so host deduplication remains effective.
 
-Implementation checkpoint: storage-envelope parser coverage passes (8 tests); the full extension suite passes (118 tests), along with TypeScript typecheck and fixture build. The first two Windows runs (`37830737883`, `37831504066`) still failed at capture startup with zero storage change events. The new fixture trace logs the content-side storage write callback or synchronous exception to locate why the storage API did not trigger the background listener. Windows E2E remains the acceptance gate.
+Implementation checkpoint: storage-envelope parser coverage passes (8 tests); the full extension suite passes (119 tests), along with TypeScript typecheck and fixture build. Runs `37830737883` and `37831504066` showed no storage changes; run `37832765068` showed four persisted outbox keys in the background but no `storage.onChanged` deliveries. The background now polls every 250 ms during active captures, and still processes event notifications and startup recovery. Windows E2E remains the acceptance gate.

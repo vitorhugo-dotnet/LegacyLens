@@ -70,6 +70,16 @@ describe('CaptureController', () => {
     expect(starts).toEqual(['1', '2']);
   });
 
+  it('lists active tabs after restoring session state for the outbox poller', async () => {
+    const controller = new CaptureController({ request: async <T>(command: string): Promise<T> => command === 'capture.start'
+      ? { id: 'a'.repeat(32), projectId: 'project', expiresAt: new Date(Date.now() + 60000).toISOString() } as T : {} as T
+    });
+    await controller.start({ projectId: 'project', tabId: 12, origin: 'https://app.example' });
+    await expect(controller.activeTabIds()).resolves.toEqual([12]);
+    await controller.stop(12);
+    await expect(controller.activeTabIds()).resolves.toEqual([]);
+  });
+
   it('does not start two captures concurrently in the same tab', async () => {
     let calls = 0;
     const controller = new CaptureController({ request: async <T>(): Promise<T> => {
