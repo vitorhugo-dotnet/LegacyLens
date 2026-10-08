@@ -162,8 +162,13 @@ func TestTraceCapturePersistsLifecycleEventsAndDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Events) != 1 || loaded.Events[0].Metadata["cookie"] != "" {
+	if len(loaded.Events) != 1 {
 		t.Fatalf("event not safely persisted: %#v", loaded.Events)
+	}
+	loadedEvent := loaded.Events[0]
+	if loadedEvent.Metadata["cookie"] != "" || loadedEvent.ProjectID != event.ProjectID || loadedEvent.TraceID != event.TraceID ||
+		loadedEvent.ProducerID != event.ProducerID || loadedEvent.EventID != event.EventID {
+		t.Fatalf("event identity was not safely persisted once: %#v", loadedEvent)
 	}
 	if len(loaded.Diagnostics) == 0 {
 		t.Fatal("diagnostics were not persisted")

@@ -2,7 +2,7 @@
 
 ## Estado
 
-Spec de arquitetura para localizar a perda do evento `jsf.click` e orientar uma possível troca do transporte entre content script e background. A instrumentação do fluxo one-shot foi executada e o CI localizou uma ausência de confirmação entre content script e background. `chrome.runtime.Port` passa a ser a candidata do redesenho; sua implementação depende da revisão e aprovação do plano de follow-up.
+Spec de arquitetura para localizar a perda do evento `jsf.click` e documentar seu redesenho. A instrumentação localizou no CI a ausência de confirmação entre content script e background. O transporte `chrome.runtime.Port` foi implementado conforme o plano de follow-up; aguarda a execução dos E2E no CI Windows.
 
 ## Objetivo
 
@@ -64,7 +64,7 @@ As tentativas anteriores reduziram o problema até depois da seleção do DOM. A
 ## Abordagens consideradas
 
 1. **Instrumentar o transporte one-shot atual (concluída).** Os registros correlacionados provaram que o content script inicia `sendMessage`, mas não recebe resposta em 35 segundos e o background não registra recebimento.
-2. **Usar uma conexão `chrome.runtime.Port` (candidata selecionada pela evidência; execução pendente).** O content script estabelece uma conexão com o background, negocia a aba/sessão, envia eventos com identificador estável e recebe ACK/NACK após o host aceitar `trace.ingest`. A conexão pode ser reaberta após desconexão e retransmitir eventos não confirmados. O plano para implementar essa alternativa ainda precisa de aprovação.
+2. **Usar uma conexão `chrome.runtime.Port` (implementada; CI Windows pendente).** O content script estabelece uma conexão com o background, negocia a aba/sessão, envia eventos com identificador estável e recebe ACK/NACK após o host aceitar `trace.ingest`. Uma fila FIFO limitada e até três reconexões retransmitem eventos não confirmados usando os mesmos IDs; a deduplicação do core torna o replay idempotente.
 3. **Mover captura/encaminhamento para mais código de página.** Não selecionada: o mundo principal não dispõe das APIs `chrome.runtime`; ainda precisaria de uma ponte de eventos para o content script e aumentaria a superfície de mensagens não confiáveis. Não remove as fronteiras que precisam ser diagnosticadas.
 
 ## Fase 1: instrumentação do transporte atual
@@ -96,16 +96,16 @@ O evento não chegou à validação do background, ao host ou à consulta. A res
 
 ## Fase 2: redesenho condicional com `Port`
 
-O gatilho desta fase foi atendido pelo run `1381b09`. Implementar somente após aprovação de `docs/superpowers/plans/2026-10-08-capture-port-reliability.md`.
+O gatilho foi atendido pelo run `1381b09`. O usuário aprovou a execução direta do plano `docs/superpowers/plans/2026-10-08-capture-port-reliability.md`; a implementação local está concluída e espera a validação dos E2E no CI Windows.
 
 ### Protocolo proposto
 
 - O content script abre `chrome.runtime.connect({ name: 'legacylens.capture.v1' })` quando a captura é armada.
 - O background valida o remetente, associa o port a `tabId`, origem e `sessionId`, e responde `ready` ou `error` antes do primeiro evento.
-- O content script envia envelopes tipados com versão, `traceId`, `eventId`, sequência por sessão, tipo de evento e metadata limitada.
+- O content script envia envelopes tipados com versão, `traceId`, `eventId`, tipo de evento e metadata limitada. O controller mantém a sequência do produtor no host e preserva o `eventId` durante replay.
 - O background valida novamente cada envelope. Só responde `ack` depois que o host confirmou `trace.ingest`; erros retornam `nack` com código seguro e correlação.
 - Após queda do port, o content script pode reconectar e reenviar eventos pendentes com os mesmos IDs. O background/core deve garantir idempotência ou detectar duplicatas antes de ativar retransmissão.
-- Ao encerrar a captura, trocar de aba/origem ou invalidar a sessão, o port é fechado e a página recebe a limpeza de instrumentação. Restarts do service worker devem levar a uma reconexão ou encerrar a sessão de modo observável.
+- Ao encerrar a captura, o content script drena ACKs por até 35 segundos e informa se restaram eventos; o background marca a lacuna e encerra a sessão. Fechamento de aba e navegação de documento fecham os Ports, marcam a captura incompleta e encerram a sessão sem abrir investigação. Após restart do service worker, o content script reconecta e reproduz eventos pendentes com os mesmos IDs.
 
 ### Limites e riscos
 
@@ -145,6 +145,6 @@ O gatilho desta fase foi atendido pelo run `1381b09`. Implementar somente após 
 - `tests/e2e/legacy-click.spec.ts` e `tests/e2e/modern-click.spec.ts`: asserts correlacionados por ID e estágio.
 - `tests/e2e/support/capture.ts`: apenas controles de fixture para iniciar/parar; o evento de usuário deve continuar usando o transporte de produção.
 
-## Aprovação pendente para a Fase 2
+## Estado de validação da Fase 2
 
-O follow-up define fila FIFO limitada a 100 eventos, até três reconexões, replay com o mesmo `eventId`, ACK após aceite do host, confirmação de deduplicação no core e limpeza no stop/fechamento/navegação. A implementação do Port aguarda a aprovação do plano pelo usuário.
+O plano implementa fila FIFO de até 100 eventos, até três reconexões, replay com o mesmo `eventId`, ACK após aceite do host, validação de duplicidade do core e limpeza no stop/fechamento/navegação. Localmente passaram os testes da extensão, typecheck, build da fixture e descoberta dos cinco E2E. Os fluxos E2E Windows e o teste Go de persistência ainda precisam ser confirmados pelo CI após o push.

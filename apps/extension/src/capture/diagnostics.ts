@@ -1,10 +1,12 @@
 export type CaptureStage =
   | 'content.selection'
   | 'content.send'
+  | 'content.port'
   | 'background.receive'
   | 'background.sender-validation'
   | 'background.session-validation'
   | 'background.record'
+  | 'background.port'
   | 'host.ingest'
   | 'investigation.query';
 
@@ -24,15 +26,15 @@ export interface CaptureDiagnosticsManifest { host_permissions?: string[] }
 export type CaptureDiagnosticsSink = (record: CaptureStageRecord) => void;
 
 const stages = new Set<CaptureStage>([
-  'content.selection', 'content.send', 'background.receive', 'background.sender-validation',
-  'background.session-validation', 'background.record', 'host.ingest', 'investigation.query',
+  'content.selection', 'content.send', 'content.port', 'background.receive', 'background.sender-validation',
+  'background.session-validation', 'background.record', 'background.port', 'host.ingest', 'investigation.query',
 ]);
 const outcomes = new Set<CaptureStageOutcome>(['started', 'accepted', 'rejected', 'timeout']);
 const safeCodes = new Set([
   'NO_ACK', 'INVALID_ACK', 'BACKGROUND_REJECTED', 'SEND_FAILED', 'TIMEOUT',
   'SENDER_TAB', 'SENDER_URL', 'ORIGIN_MISMATCH', 'EVENT_INVALID', 'SESSION_UNAVAILABLE', 'SESSION_MISMATCH',
   'METADATA_INVALID', 'EVENT_ID', 'SPAN_ID', 'NETWORK_INVALID', 'RECORD_FAILED', 'INTERNAL',
-  'DISCONNECTED', 'POST_FAILED', 'HOST_REJECTED', 'NATIVE_ERROR',
+  'DISCONNECTED', 'POST_FAILED', 'HOST_REJECTED', 'NATIVE_ERROR', 'HOST_TIMEOUT', 'QUEUE_FULL', 'RECONNECT_EXHAUSTED', 'PORT_CLOSED', 'INVALID_MESSAGE',
 ]);
 
 export function recordCaptureStage(

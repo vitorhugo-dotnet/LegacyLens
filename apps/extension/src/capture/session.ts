@@ -7,6 +7,13 @@ export interface CaptureRequest { projectId: string; tabId: number; origin: stri
 export interface ActiveCapture { request: CaptureRequest; session: CaptureSession; producerId: string; sequence: number; gap: boolean }
 export interface SessionStore { load(): Promise<ActiveCapture[]>; save(captures: ActiveCapture[]): Promise<void> }
 export interface EventIdentity { eventId?: string; parentEventId?: string }
+export interface CaptureRecordResult { gap: boolean; duplicate: boolean }
+export class CaptureRecordError extends Error {
+  constructor(readonly code: 'HOST_TIMEOUT' | 'RECORD_FAILED', readonly retryable: boolean) {
+    super('Capture transport interrupted; investigation has a gap');
+    this.name = 'CaptureRecordError';
+  }
+}
 export type CaptureControllerDiagnostics = (record: CaptureStageRecord) => void;
 
 function randomHex(bytes: number): string {
@@ -17,7 +24,7 @@ export class CaptureController {
   private captures = new Map<number, ActiveCapture>();
   private starting = new Set<number>();
   private stopping = new Set<number>();
-  private recording = new Map<number, Promise<void>>();
+  private recording = new Map<number, Promise<CaptureRecordResult>>();
   private loading?: Promise<void>;
 
   constructor(private readonly client: CommandClient, private readonly store?: SessionStore,
@@ -37,6 +44,14 @@ export class CaptureController {
   }
 
   get(tabId: number): ActiveCapture | undefined { return this.captures.get(tabId); }
+
+  async markGap(tabId: number): Promise<void> {
+    await this.restore();
+    const entry = this.captures.get(tabId);
+    if (!entry) return;
+    entry.gap = true;
+    await this.persist();
+  }
 
   async start(request: CaptureRequest): Promise<CaptureSession> {
     await this.restore();
@@ -83,7 +98,7 @@ export class CaptureController {
     } finally { this.stopping.delete(tabId); }
   }
 
-  async record(tabId: number, kind: string, metadata: Record<string, string>, identity: EventIdentity = {}): Promise<void> {
+  async record(tabId: number, kind: string, metadata: Record<string, string>, identity: EventIdentity = {}): Promise<CaptureRecordResult> {
     if (this.stopping.has(tabId)) throw new Error('Capture is stopping');
     for (const id of [identity.eventId, identity.parentEventId]) {
       if (id !== undefined && (!/^[a-f0-9]{16}$/i.test(id) || /^0+$/.test(id))) throw new Error('Invalid capture event identity');
@@ -91,28 +106,30 @@ export class CaptureController {
     const previous = this.recording.get(tabId) ?? Promise.resolve();
     const next = previous.catch(() => {}).then(() => this.recordNow(tabId, kind, metadata, identity));
     this.recording.set(tabId, next);
-    try { await next; } finally { if (this.recording.get(tabId) === next) this.recording.delete(tabId); }
+    try { return await next; } finally { if (this.recording.get(tabId) === next) this.recording.delete(tabId); }
   }
 
-  private async recordNow(tabId: number, kind: string, metadata: Record<string, string>, identity: EventIdentity): Promise<void> {
+  private async recordNow(tabId: number, kind: string, metadata: Record<string, string>, identity: EventIdentity): Promise<CaptureRecordResult> {
     await this.restore();
     const entry = this.captures.get(tabId);
-    if (!entry || Date.parse(entry.session.expiresAt) <= Date.now()) return;
+    if (!entry || Date.parse(entry.session.expiresAt) <= Date.now()) throw new Error('Capture session is missing or expired');
     try {
       if (entry.gap) {
         await this.sendEvent(entry, 'extension.gap', { code: 'CAPTURE_RECONNECTED' });
         entry.gap = false;
         await this.persist();
       }
-      await this.sendEvent(entry, kind, metadata, identity);
-    } catch {
+      const result = await this.sendEvent(entry, kind, metadata, identity);
+      return { gap: entry.gap, duplicate: result.duplicate };
+    } catch (error) {
       entry.gap = true;
       await this.persist();
-      throw new Error('Capture transport interrupted; investigation has a gap');
+      if (error instanceof NativeRequestError && error.code === 'timeout') throw new CaptureRecordError('HOST_TIMEOUT', true);
+      throw new CaptureRecordError('RECORD_FAILED', false);
     }
   }
 
-  private async sendEvent(entry: ActiveCapture, kind: string, metadata: Record<string, string>, identity: EventIdentity = {}): Promise<void> {
+  private async sendEvent(entry: ActiveCapture, kind: string, metadata: Record<string, string>, identity: EventIdentity = {}): Promise<{ duplicate: boolean }> {
     const event: Event = { projectId: entry.request.projectId, traceId: entry.session.id, producerId: entry.producerId,
       sequence: ++entry.sequence, eventId: identity.eventId ?? randomHex(8), ...(identity.parentEventId ? { parentEventId: identity.parentEventId } : {}),
       kind, occurredAt: new Date().toISOString(), metadata };
@@ -121,8 +138,9 @@ export class CaptureController {
     const startedAt = Date.now();
     this.diagnostics({ stage: 'host.ingest', outcome: 'started', ...correlation });
     try {
-      await this.client.request('trace.ingest', { projectId: entry.request.projectId, events: [event] });
+      const result = await this.client.request<{ accepted?: number; duplicate?: number }>('trace.ingest', { projectId: entry.request.projectId, events: [event] });
       this.diagnostics({ stage: 'host.ingest', outcome: 'accepted', ...correlation, durationMs: Date.now() - startedAt });
+      return { duplicate: result.duplicate === 1 };
     } catch (error) {
       const code = error instanceof NativeRequestError ? error.code.toUpperCase().replaceAll('-', '_') : 'NATIVE_ERROR';
       this.diagnostics({ stage: 'host.ingest', outcome: error instanceof NativeRequestError && error.code === 'timeout' ? 'timeout' : 'rejected',

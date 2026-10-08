@@ -5,7 +5,7 @@ const traceId = 'a'.repeat(32);
 const eventId = 'b'.repeat(16);
 const active = { session: { id: traceId, expiresAt: new Date(Date.now() + 60_000).toISOString() }, request: { origin: 'http://localhost:8180' }, gap: false };
 function setup() {
-  const record = vi.fn().mockResolvedValue(undefined);
+  const record = vi.fn().mockResolvedValue({ gap: false, duplicate: false });
   const controller = { restore: vi.fn(), get: vi.fn(() => active), record };
   const diagnostics = vi.fn();
   return { record, controller, diagnostics };
@@ -16,7 +16,7 @@ const sender = { url: 'http://localhost:8180/page', tab: { id: 4, url: 'http://l
 describe('background capture event boundary', () => {
   it('acknowledges a valid event only after record succeeds', async () => {
     const deps = setup();
-    await expect(handleCaptureEvent(message, sender, deps.controller as never, deps.diagnostics)).resolves.toEqual({ accepted: true, gap: false });
+    await expect(handleCaptureEvent(message, sender, deps.controller as never, deps.diagnostics)).resolves.toEqual({ accepted: true, gap: false, duplicate: false });
     expect(deps.record).toHaveBeenCalledWith(4, 'jsf.click', { source: 'button' }, { eventId });
   });
   it.each([

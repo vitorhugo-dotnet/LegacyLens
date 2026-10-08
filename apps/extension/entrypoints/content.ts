@@ -3,7 +3,7 @@ import type { CaptureSession } from '@legacylens/contracts/src/protocol.ts';
 import { chooseElement } from '../src/capture/selection.ts';
 import { toStackMetadata } from '../src/capture/stack.ts';
 import { recordCaptureStage } from '../src/capture/diagnostics.ts';
-import { requestCaptureEvent } from '../src/capture/messages.ts';
+import { CapturePortClient } from '../src/capture/port-client.ts';
 
 export default defineContentScript({
   matches: ['http://*/*', 'https://*/*'],
@@ -28,6 +28,7 @@ export default defineContentScript({
     });
 
     let session: CaptureSession | undefined;
+    let capturePort: CapturePortClient | undefined;
     let captureTabId = -1;
     let nonce = '';
     let selectedSource = '';
@@ -35,14 +36,25 @@ export default defineContentScript({
     let stopChoosing: (() => void) | undefined;
     const resetCapture = () => {
       stopChoosing?.(); stopChoosing = undefined;
+      const previousPort = capturePort; capturePort = undefined;
+      if (previousPort) void previousPort.stop();
       if (nonce) window.dispatchEvent(new CustomEvent('legacylens:stop', { detail: { nonce } }));
       session = undefined; captureTabId = -1; selectedSource = ''; clickEventId = ''; nonce = '';
     };
-    const sendCaptureEvent = (message: { type: 'capture.event'; sessionId: string; kind: string; eventId?: string; parentEventId?: string; metadata: Record<string, string> }) =>
-      requestCaptureEvent((payload) => chrome.runtime.sendMessage(payload), message,
-        { traceId: message.sessionId, tabId: captureTabId },
-        recordContentStage);
-    const beginCapture = (projectId: string, nextSession: CaptureSession, expectedOrigin: string, tabId: number) => {
+    const randomEventId = () => {
+      let id = '';
+      do { id = [...crypto.getRandomValues(new Uint8Array(8))].map((byte) => byte.toString(16).padStart(2, '0')).join(''); } while (/^0+$/.test(id));
+      return id;
+    };
+    const sendCaptureEvent = async (message: { type: 'capture.event'; sessionId: string; kind: string; eventId?: string; parentEventId?: string; metadata: Record<string, string> }) => {
+      const eventId = message.eventId ?? randomEventId();
+      const client = capturePort;
+      if (!client) throw new Error('PORT_CLOSED');
+      const result = await client.send({ eventId, kind: message.kind, ...(message.parentEventId ? { parentEventId: message.parentEventId } : {}), metadata: message.metadata });
+      recordContentStage({ stage: 'content.port', outcome: 'accepted', traceId: message.sessionId, tabId: captureTabId, eventId });
+      return result;
+    };
+    const beginCapture = async (projectId: string, nextSession: CaptureSession, expectedOrigin: string, tabId: number) => {
       const expiresAt = Date.parse(nextSession.expiresAt);
       if (nextSession.projectId !== projectId || !/^[a-f0-9]{32}$/i.test(nextSession.id)
         || !Number.isFinite(expiresAt) || expiresAt <= Date.now() || expectedOrigin !== location.origin) {
@@ -52,12 +64,19 @@ export default defineContentScript({
       resetCapture();
       session = nextSession;
       captureTabId = tabId;
+      capturePort = new CapturePortClient((name) => chrome.runtime.connect({ name }), (stage, eventId, code) => {
+        const outcome = stage.endsWith('ack') || stage.endsWith('ready') ? 'accepted'
+          : stage.includes('timeout') ? 'timeout' : stage.includes('nack') || stage.includes('overflow') || stage.includes('invalid') || stage.includes('exhausted') ? 'rejected' : 'started';
+        recordContentStage({ stage: 'content.port', outcome, traceId: nextSession.id, tabId,
+          ...(eventId ? { eventId } : {}), ...(code ? { code } : {}) });
+      });
+      try { await capturePort.start(nextSession.id); }
+      catch (error) { resetCapture(); throw error; }
       nonce = [...crypto.getRandomValues(new Uint8Array(16))].map((n) => n.toString(16).padStart(2, '0')).join('');
       window.dispatchEvent(new CustomEvent('legacylens:start', { detail: { nonce, traceId: session.id, origin: location.origin } }));
       stopChoosing = chooseElement(document, (id) => {
         selectedSource = id;
-        do { clickEventId = [...crypto.getRandomValues(new Uint8Array(8))].map((byte) => byte.toString(16).padStart(2, '0')).join(''); }
-        while (/^0+$/.test(clickEventId));
+        clickEventId = randomEventId();
         recordContentStage({ stage: 'content.selection', outcome: 'accepted', traceId: session!.id, tabId: captureTabId, eventId: clickEventId });
         window.dispatchEvent(new CustomEvent('legacylens:select', { detail: { nonce, source: id } }));
         void sendCaptureEvent({ type: 'capture.event', sessionId: session!.id, kind: 'jsf.click', eventId: clickEventId, metadata: { source: id } })
@@ -69,11 +88,22 @@ export default defineContentScript({
       try {
         if (msg?.type === 'capture.begin' && typeof msg.projectId === 'string' && typeof msg.origin === 'string'
           && Number.isSafeInteger(msg.tabId) && (msg.tabId as number) >= 0 && msg.session && typeof msg.session === 'object') {
-          beginCapture(msg.projectId, msg.session as CaptureSession, msg.origin, msg.tabId as number);
-          respond({ ok: true });
+          void beginCapture(msg.projectId, msg.session as CaptureSession, msg.origin, msg.tabId as number)
+            .then(() => respond({ ok: true }), (error: unknown) => respond({ error: error instanceof Error ? error.message : 'Capture setup failed' }));
+          return true;
         } else if (msg?.type === 'capture.end' && typeof msg.traceId === 'string') {
-          if (!session || session.id === msg.traceId) resetCapture();
-          respond({ ok: true });
+          const stop = async () => {
+            if (!session || session.id === msg.traceId) {
+              const current = capturePort; capturePort = undefined;
+              const gap = await current?.stop();
+              resetCapture();
+              respond({ ok: true, gap: gap === true });
+              return;
+            }
+            respond({ ok: true });
+          };
+          void stop();
+          return true;
         }
       } catch (error) {
         console.error('LegacyLens could not update capture state', error);

@@ -1,12 +1,13 @@
 import type { ActiveCapture } from './session.ts';
 import type { CaptureStageRecord } from './diagnostics.ts';
 import type { CaptureEventReply } from './messages.ts';
+import { CaptureRecordError } from './session.ts';
 
 export interface CaptureMessageSender { url?: string | undefined; tab?: { id?: number | undefined; url?: string | undefined } | undefined }
 export interface CaptureEventController {
   restore(): Promise<void>;
   get(tabId: number): ActiveCapture | undefined;
-  record(tabId: number, kind: string, metadata: Record<string, string>, identity?: { eventId?: string; parentEventId?: string }): Promise<void>;
+  record(tabId: number, kind: string, metadata: Record<string, string>, identity?: { eventId?: string; parentEventId?: string }): Promise<{ gap: boolean; duplicate: boolean }>;
 }
 export type CaptureBoundaryDiagnostics = (record: CaptureStageRecord) => void;
 
@@ -86,15 +87,17 @@ export async function handleCaptureEvent(
   const recordStartedAt = Date.now();
   diagnostics({ stage: 'background.record', outcome: 'started', ...correlation });
   try {
-    await controller.record(tabId, msg.kind, safe, { ...(eventId ? { eventId } : {}), ...(parentEventId ? { parentEventId } : {}) });
-  } catch {
+    const recorded = await controller.record(tabId, msg.kind, safe, { ...(eventId ? { eventId } : {}), ...(parentEventId ? { parentEventId } : {}) });
     const durationMs = Date.now() - recordStartedAt;
-    diagnostics({ stage: 'background.record', outcome: 'rejected', ...correlation, durationMs, code: 'RECORD_FAILED' });
-    diagnostics({ stage: 'background.receive', outcome: 'rejected', ...correlation, durationMs, code: 'RECORD_FAILED' });
-    return error('Capture event could not be recorded', 'RECORD_FAILED');
+    diagnostics({ stage: 'background.record', outcome: 'accepted', ...correlation, durationMs });
+    diagnostics({ stage: 'background.receive', outcome: 'accepted', ...correlation, durationMs });
+    return { accepted: true, gap: recorded.gap, duplicate: recorded.duplicate };
+  } catch (failure) {
+    const durationMs = Date.now() - recordStartedAt;
+    const code = failure instanceof CaptureRecordError ? failure.code : 'RECORD_FAILED';
+    const retryable = failure instanceof CaptureRecordError && failure.retryable;
+    diagnostics({ stage: 'background.record', outcome: 'rejected', ...correlation, durationMs, code });
+    diagnostics({ stage: 'background.receive', outcome: 'rejected', ...correlation, durationMs, code });
+    return { ...error('Capture event could not be recorded', code), retryable };
   }
-  const durationMs = Date.now() - recordStartedAt;
-  diagnostics({ stage: 'background.record', outcome: 'accepted', ...correlation, durationMs });
-  diagnostics({ stage: 'background.receive', outcome: 'accepted', ...correlation, durationMs });
-  return { accepted: true, gap: active.gap };
 }

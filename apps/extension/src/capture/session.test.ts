@@ -41,6 +41,20 @@ describe('CaptureController', () => {
     expect(events).toMatchObject([{ eventId: '1'.repeat(16), kind: 'jsf.click' },
       { parentEventId: '1'.repeat(16), kind: 'browser.network' }]);
   });
+
+  it('returns host acceptance identity including duplicate replay status', async () => {
+    let duplicate = 0;
+    const controller = new CaptureController({ request: async <T>(command: string): Promise<T> => {
+      if (command === 'capture.start') return { id: 'a'.repeat(32), projectId: 'project', expiresAt: new Date(Date.now() + 60000).toISOString() } as T;
+      return { accepted: duplicate ? 0 : 1, duplicate } as T;
+    } });
+    await controller.start({ projectId: 'project', tabId: 18, origin: 'https://app.example' });
+    await expect(controller.record(18, 'jsf.click', {}, { eventId: '1'.repeat(16) }))
+      .resolves.toEqual({ gap: false, duplicate: false });
+    duplicate = 1;
+    await expect(controller.record(18, 'jsf.click', {}, { eventId: '1'.repeat(16) }))
+      .resolves.toEqual({ gap: false, duplicate: true });
+  });
   it('keeps tabs isolated and permits only one capture per tab', async () => {
     const starts: string[] = [];
     const controller = new CaptureController({
@@ -102,7 +116,7 @@ describe('CaptureController', () => {
     expect(calls).not.toContain('capture.stop');
     release();
     await Promise.all([record, stop]);
-    await controller.record(4, 'jsf.click', { source: 'later' });
+    await expect(controller.record(4, 'jsf.click', { source: 'later' })).rejects.toThrow('missing or expired');
     expect(calls).toEqual(['capture.start', 'trace.ingest', 'capture.stop']);
   });
 

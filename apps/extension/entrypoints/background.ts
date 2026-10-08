@@ -2,7 +2,8 @@ import { defineBackground } from 'wxt/utils/define-background';
 import type { CaptureSession, ProjectListResult } from '@legacylens/contracts/src/protocol.ts';
 import { NativeClient } from '../src/native/client.ts';
 import { CaptureController, type ActiveCapture } from '../src/capture/session.ts';
-import { handleCaptureEvent } from '../src/capture/background-messages.ts';
+import { handleCapturePort } from '../src/capture/background-port.ts';
+import { CAPTURE_PORT_NAME } from '../src/capture/port-protocol.ts';
 import { recordCaptureStage } from '../src/capture/diagnostics.ts';
 
 const client = new NativeClient();
@@ -43,6 +44,11 @@ const controller = new CaptureController(client, {
   async load() { return ((await chrome.storage.session.get(stateKey))[stateKey] ?? []) as ActiveCapture[]; },
   async save(entries) { await chrome.storage.session.set({ [stateKey]: entries }); },
 }, recordDiagnostic);
+const capturePortsByTab = new Map<number, Set<() => void>>();
+function closeCapturePorts(tabId: number): void {
+  for (const close of capturePortsByTab.get(tabId) ?? []) close();
+  capturePortsByTab.delete(tabId);
+}
 
 function originOf(url?: string): string | undefined {
   if (!url) return undefined;
@@ -177,19 +183,25 @@ async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?
   }
 }
 
-async function stopCapture(tab?: chrome.tabs.Tab, options: { notifyContent?: boolean } = {}): Promise<void> {
+async function stopCapture(tab?: chrome.tabs.Tab, options: { notifyContent?: boolean; openInvestigation?: boolean } = {}): Promise<void> {
   const tabId = tab?.id;
   if (tabId === undefined) return;
   try {
     await controller.restore();
     const active = controller.get(tabId);
     if (!active) return;
-    await controller.stop(tabId);
     if (options.notifyContent !== false) {
-      try { await chrome.tabs.sendMessage(tabId, { type: 'capture.end', traceId: active.session.id }); }
-      catch (error) { console.info('LegacyLens stopped capture after the page content script became unavailable', error); }
+      try {
+        const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.end', traceId: active.session.id }) as { ok?: boolean; gap?: boolean };
+        if (!reply?.ok || reply.gap) await controller.markGap(tabId);
+      }
+      catch (error) {
+        await controller.markGap(tabId);
+        console.info('LegacyLens stopped capture after the page content script became unavailable', error);
+      }
     }
-    await openInvestigation(active.request.projectId, active.session.id);
+    await controller.stop(tabId);
+    if (options.openInvestigation !== false) await openInvestigation(active.request.projectId, active.session.id);
     await chrome.action.setBadgeText({ tabId, text: '' });
   } catch (error) {
     console.error('LegacyLens could not stop capture', error);
@@ -227,9 +239,7 @@ export default defineBackground(() => {
         }
         return { ok: true, session };
       }
-      const active = controller.get(tabId);
-      await stopCapture(tab, { notifyContent: false });
-      if (active) await chrome.tabs.sendMessage(tabId, { type: 'capture.end', traceId: active.session.id });
+      await stopCapture(tab, { openInvestigation: false });
       return { ok: true };
     };
   }
@@ -251,11 +261,39 @@ export default defineBackground(() => {
     else if (menuId === manageMenuId) void openInvestigation().catch((error) => console.error('LegacyLens could not open project management', error));
   });
   chrome.tabs.onRemoved.addListener((tabId) => {
+    closeCapturePorts(tabId);
+    void controller.markGap(tabId).then(() => controller.stop(tabId)).catch((error) => console.warn('LegacyLens could not stop capture for closed tab', error));
     void chrome.storage.session.get(selectedProjectsKey).then((stored) => {
       const selected = (stored[selectedProjectsKey] ?? {}) as Record<string, string>;
       delete selected[String(tabId)];
       return chrome.storage.session.set({ [selectedProjectsKey]: selected });
     }).catch((error) => console.warn('LegacyLens could not clear closed-tab project selection', error));
+  });
+
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (!changeInfo.url || !controller.get(tabId)) return;
+    closeCapturePorts(tabId);
+    void controller.markGap(tabId).then(() => stopCapture(tab, { notifyContent: false, openInvestigation: false }))
+      .catch((error) => console.warn('LegacyLens could not stop capture after page navigation', error));
+  });
+
+  chrome.runtime.onConnect.addListener((port) => {
+    if (port.name !== CAPTURE_PORT_NAME) {
+      try { port.disconnect(); } catch { /* port already closed */ }
+      return;
+    }
+    const tabId = port.sender?.tab?.id;
+    let cleanup = () => {};
+    cleanup = handleCapturePort(port, controller, recordDiagnostic, () => {
+      const cleanups = tabId === undefined ? undefined : capturePortsByTab.get(tabId);
+      cleanups?.delete(cleanup);
+      if (tabId !== undefined && cleanups?.size === 0) capturePortsByTab.delete(tabId);
+    });
+    if (tabId !== undefined) {
+      const cleanups = capturePortsByTab.get(tabId) ?? new Set<() => void>();
+      cleanups.add(cleanup);
+      capturePortsByTab.set(tabId, cleanups);
+    }
   });
 
   chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
@@ -264,12 +302,6 @@ export default defineBackground(() => {
     // Use the tab URL when a dynamically injected script has no HTTP sender URL.
     const senderOrigin = originOf(sender.url) ?? originOf(sender.tab?.url);
     if (!msg || typeof msg.type !== 'string') return;
-    if (msg.type === 'capture.event') {
-      void handleCaptureEvent(message, sender, controller,
-        recordDiagnostic)
-        .then((reply) => { if (reply) respond(reply); }, () => respond({ error: 'Capture event failed', code: 'INTERNAL' }));
-      return true;
-    }
     if (tabId === undefined || !senderOrigin) return;
     const run = async () => {
       throw new Error('Unsupported capture message');
