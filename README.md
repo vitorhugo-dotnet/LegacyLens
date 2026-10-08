@@ -49,7 +49,7 @@ Esse pacote é experimental e não promete instalador, registro automático do h
    .\legacylens.exe serve
    ```
 
-4. Deixe o terminal com `serve` aberto. Abra a aplicação JSF no Chrome ou Edge, escolha o projeto registrado no controle da extensão sobre a página e inicie uma captura antes de realizar a interação. Ao parar a captura, a extensão abre a investigação; também é possível indexar o projeto e buscar código na página de investigação. Os dados do projeto são mantidos localmente. Em outro terminal, execute ` .\legacylens.exe status` para verificar se o core está respondendo.
+4. Deixe o terminal com `serve` aberto. Abra a aplicação JSF no Chrome ou Edge, clique no ícone do LegacyLens ou use **LegacyLens: capturar interação** no menu do botão direito. Autorize o acesso ao site quando solicitado, escolha o projeto e inicie a captura antes de realizar a interação. Ao parar a captura, a extensão abre a investigação; também é possível indexar o projeto e buscar código na página de investigação. Os dados do projeto são mantidos localmente. Em outro terminal, execute `legacylens.exe status` para verificar se o core está respondendo.
 
 ### Publicação de releases
 

@@ -8,6 +8,10 @@ export default defineContentScript({
   world: 'MAIN',
   runAt: 'document_start',
   main() {
+    const global = globalThis as typeof globalThis & { __legacylensPageContentInstalled?: boolean };
+    if (global.__legacylensPageContentInstalled) return;
+    global.__legacylensPageContentInstalled = true;
+
     // Install before page scripts register listeners; selection arms one matching click later.
     installAsyncContextCapture();
     let adapter: PagePrimeFacesAdapter | undefined;

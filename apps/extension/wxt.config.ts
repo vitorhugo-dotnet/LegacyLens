@@ -6,7 +6,7 @@ export default defineConfig({
     name: 'LegacyLens',
     description: 'Select and capture PrimeFaces interactions for local investigation.',
     version: '1.0.0',
-    permissions: ['nativeMessaging', 'storage', 'scripting', 'activeTab', 'tabs'],
+    permissions: ['nativeMessaging', 'storage', 'scripting', 'activeTab', 'tabs', 'contextMenus'],
     optional_host_permissions: ['http://*/*', 'https://*/*'],
     ...(process.env.LEGACYLENS_FIXTURE_EXTENSION === '1' ? { host_permissions: ['http://127.0.0.1/*'] } : {}),
     action: { default_title: 'LegacyLens capture' },

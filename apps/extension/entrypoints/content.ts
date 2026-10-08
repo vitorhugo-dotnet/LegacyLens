@@ -14,6 +14,10 @@ export default defineContentScript({
   matches: ['http://*/*', 'https://*/*'],
   runAt: 'document_start',
   main() {
+    const global = globalThis as typeof globalThis & { __legacylensContentScriptInstalled?: boolean };
+    if (global.__legacylensContentScriptInstalled) return;
+    global.__legacylensContentScriptInstalled = true;
+
     let session: CaptureSession | undefined;
     let nonce = '';
     let selectedSource = '';

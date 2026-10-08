@@ -15,17 +15,47 @@ function originOf(url?: string): string | undefined {
   try { const parsed = new URL(url); return ['https:', 'http:'].includes(parsed.protocol) ? parsed.origin : undefined; } catch { return undefined; }
 }
 
+const captureMenuId = 'legacylens.capture';
+
+async function openSelection(tab?: chrome.tabs.Tab): Promise<void> {
+  if (tab?.id === undefined) return;
+  const origin = originOf(tab.url);
+  if (!origin) {
+    await chrome.action.setBadgeText({ tabId: tab.id, text: 'N/A' });
+    return;
+  }
+
+  const selected = new URL(origin);
+  const permission = { origins: [`${selected.protocol}//${selected.hostname}/*`] };
+  // Request permission before the first await so Chrome can associate it with
+  // the toolbar or context-menu click that initiated this flow.
+  if (!(await chrome.permissions.request(permission))) return;
+
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-scripts/content.js'] });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-scripts/page.js'], world: 'MAIN' });
+    await chrome.tabs.sendMessage(tab.id, { type: 'selection.open' });
+    await chrome.action.setBadgeText({ tabId: tab.id, text: '' });
+  } catch {
+    await chrome.action.setBadgeText({ tabId: tab.id, text: 'ERR' });
+  }
+}
+
 export default defineBackground(() => {
   void controller.restore();
-  chrome.action.onClicked.addListener(async (tab) => {
-    if (tab.id === undefined) return;
-    const origin = originOf(tab.url);
-    if (!origin) { await chrome.action.setBadgeText({ tabId: tab.id, text: 'N/A' }); return; }
-    const selected = new URL(origin);
-    const permission = { origins: [`${selected.protocol}//${selected.hostname}/*`] };
-    if (!(await chrome.permissions.contains(permission)) && !(await chrome.permissions.request(permission))) return;
-    try { await chrome.tabs.sendMessage(tab.id, { type: 'selection.open' }); }
-    catch { await chrome.action.setBadgeText({ tabId: tab.id, text: 'ERR' }); }
+  chrome.runtime.onInstalled.addListener(() => {
+    chrome.contextMenus.removeAll(() => {
+      chrome.contextMenus.create({
+        id: captureMenuId,
+        title: 'LegacyLens: capturar interação',
+        contexts: ['page'],
+        documentUrlPatterns: ['http://*/*', 'https://*/*'],
+      });
+    });
+  });
+  chrome.action.onClicked.addListener((tab) => { void openSelection(tab); });
+  chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId === captureMenuId) void openSelection(tab);
   });
 
   chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
