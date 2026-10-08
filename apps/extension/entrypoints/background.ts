@@ -224,6 +224,32 @@ async function selectProject(menuId: string, tab?: chrome.tabs.Tab): Promise<voi
 }
 
 export default defineBackground(() => {
+  // Capture transport is critical; register it before menu APIs that can fail independently.
+  chrome.runtime.onConnect.addListener((port) => {
+    if (fixtureMode) {
+      const debug = globalThis as FixtureDebugGlobal;
+      debug.__legacylensFixtureRuntimeConnectCount = (debug.__legacylensFixtureRuntimeConnectCount ?? 0) + 1;
+      setFixturePhase(`port.connect:${port.name}`);
+      console.info(`LegacyLens fixture port connected: ${port.name}`);
+    }
+    if (port.name !== CAPTURE_PORT_NAME) {
+      try { port.disconnect(); } catch { /* already disconnected */ }
+      return;
+    }
+    const tabId = port.sender?.tab?.id;
+    let cleanup = () => {};
+    cleanup = handleCapturePort(port, controller, recordDiagnostic, () => {
+      const cleanups = tabId === undefined ? undefined : capturePortsByTab.get(tabId);
+      cleanups?.delete(cleanup);
+      if (tabId !== undefined && cleanups?.size === 0) capturePortsByTab.delete(tabId);
+    });
+    if (tabId !== undefined) {
+      const cleanups = capturePortsByTab.get(tabId) ?? new Set<() => void>();
+      cleanups.add(cleanup);
+      capturePortsByTab.set(tabId, cleanups);
+    }
+  });
+  if (fixtureMode) (globalThis as FixtureDebugGlobal).__legacylensFixtureRuntimeConnectRegistered = true;
   if (fixtureMode) {
     globalThis.addEventListener('error', (event) => setFixturePhase(`uncaught:${event.message.slice(0, 120)}`));
     globalThis.addEventListener('unhandledrejection', () => setFixturePhase('unhandled-rejection'));
@@ -289,32 +315,6 @@ export default defineBackground(() => {
     void controller.markGap(tabId).then(() => stopCapture(tab, { notifyContent: false, openInvestigation: false }))
       .catch((error) => console.warn('LegacyLens could not stop capture after page navigation', error));
   });
-
-  chrome.runtime.onConnect.addListener((port) => {
-    if (fixtureMode) {
-      const debug = globalThis as FixtureDebugGlobal;
-      debug.__legacylensFixtureRuntimeConnectCount = (debug.__legacylensFixtureRuntimeConnectCount ?? 0) + 1;
-      setFixturePhase(`port.connect:${port.name}`);
-      console.info(`LegacyLens fixture port connected: ${port.name}`);
-    }
-    if (port.name !== CAPTURE_PORT_NAME) {
-      try { port.disconnect(); } catch { /* port already closed */ }
-      return;
-    }
-    const tabId = port.sender?.tab?.id;
-    let cleanup = () => {};
-    cleanup = handleCapturePort(port, controller, recordDiagnostic, () => {
-      const cleanups = tabId === undefined ? undefined : capturePortsByTab.get(tabId);
-      cleanups?.delete(cleanup);
-      if (tabId !== undefined && cleanups?.size === 0) capturePortsByTab.delete(tabId);
-    });
-    if (tabId !== undefined) {
-      const cleanups = capturePortsByTab.get(tabId) ?? new Set<() => void>();
-      cleanups.add(cleanup);
-      capturePortsByTab.set(tabId, cleanups);
-    }
-  });
-  if (fixtureMode) (globalThis as FixtureDebugGlobal).__legacylensFixtureRuntimeConnectRegistered = true;
 
   chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
     const msg = message as Record<string, unknown>;
