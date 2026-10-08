@@ -55,12 +55,13 @@ jobs:
           if (-not (Test-Path (Join-Path $expandedPath 'analyzer/legacylens-analyzer.jar'))) { throw 'Packaged Java analyzer is missing.' }
           $extensionManifest = Get-Content (Join-Path $expandedPath 'extension/manifest.json') -Raw | ConvertFrom-Json
           if ($extensionManifest.version -ne $manifest.componentVersions.extension) { throw 'Extension manifest version does not match package provenance.' }
-          $requiredChecks = @('contracts','extension','core','java8-runtime','java8-agent-smoke','java8-analyzer-smoke','java21-runtime','java21-agent-smoke','java21-analyzer-smoke','legacy-fixture','legacy-e2e','packaged-core-smoke','packaged-agent-smoke','packaged-analyzer-smoke')
+          $requiredChecks = @('contracts','extension','core','java8-runtime','java8-agent-smoke','java8-analyzer-smoke','java21-runtime','java21-agent-smoke','java21-analyzer-smoke','legacy-fixture','legacy-e2e','modern-fixture','modern-e2e','redeploy','packaged-core-smoke','packaged-agent-smoke','packaged-analyzer-smoke','packaged-java8-smoke','packaged-java21-smoke')
           foreach ($check in $requiredChecks) { if ($manifest.verificationResults.$check -ne 'passed') { throw "Required verification is missing or not passed: $check" } }
           if ($manifest.releasePrerequisites.task11JavaWorker -ne 'complete' -or $manifest.releasePrerequisites.task17ModernFixture -ne 'complete') { throw 'Release is blocked until Task11 Java worker and Task17 modern fixture assets and checks are complete.' }
           foreach ($asset in $manifest.releasePrerequisites.requiredAssets) { if (-not (Test-Path (Join-Path $expandedPath $asset))) { throw "Required release asset is missing: $asset" } }
-          foreach ($file in @('legacylens.exe','legacylens-host.exe','agent/legacylens-agent.jar','analyzer/legacylens-analyzer.jar','extension/manifest.json','LICENSE','README.md')) { if (-not (Test-Path (Join-Path $expandedPath $file))) { throw "Package is missing required file: $file" } }
+          foreach ($file in @('legacylens.exe','legacylens-host.exe','agent/legacylens-agent.jar','analyzer/legacylens-analyzer.jar','extension/manifest.json','fixtures/modern/modern-fixture.war','fixtures/modern/fixture-lock.json','fixtures/modern/release-evidence.json','fixtures/modern/schema.sql','docs/release-manifest.schema.json','docs/windows-installation.md','scripts/install-native-host.ps1','scripts/uninstall-native-host.ps1','LICENSE','README.md')) { if (-not (Test-Path (Join-Path $expandedPath $file))) { throw "Package is missing required file: $file" } }
       - name: Publish verified assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME artifacts/legacylens-windows-x64.zip artifacts/SHA256SUMS.txt --verify-tag --generate-notes
+        run: |
+          gh release create $env:GITHUB_REF_NAME artifacts/legacylens-windows-x64.zip artifacts/SHA256SUMS.txt --verify-tag --title $env:GITHUB_REF_NAME --notes 'Verified reference stacks: Java 8 + WildFly 10 + Faces 2 + PrimeFaces 5 + MySQL 5; Java 21 + WildFly 35 + Faces 4 + PrimeFaces 15 Jakarta + MySQL 8.4. Windows 10 x64 validation remains pending on a separate machine. Other versions and application servers are not implied supported.'

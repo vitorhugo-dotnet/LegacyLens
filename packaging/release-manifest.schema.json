@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://legacylens.dev/schemas/release-manifest.schema.json",
+  "title": "LegacyLens release manifest",
+  "type": "object",
+  "required": [
+    "product", "version", "commit", "platform", "protocolVersion",
+    "componentVersions", "components", "verificationResults", "releasePrerequisites", "exclusions"
+  ],
+  "properties": {
+    "product": { "const": "LegacyLens" },
+    "version": { "type": "string", "minLength": 1 },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "platform": { "const": "windows/amd64" },
+    "protocolVersion": { "type": "integer", "minimum": 1 },
+    "componentVersions": {
+      "type": "object",
+      "required": ["core", "nativeHost", "extension", "javaAgent", "javaAnalyzer", "goToolchain", "nodeToolchain", "javaRuntime"],
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "components": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "verificationResults": { "type": "object", "additionalProperties": { "enum": ["passed", "failed", "skipped"] } },
+    "releasePrerequisites": {
+      "type": "object",
+      "required": ["task11JavaWorker", "task17ModernFixture", "requiredAssets"],
+      "properties": {
+        "task11JavaWorker": { "enum": ["complete", "pending"] },
+        "task17ModernFixture": { "enum": ["complete", "pending"] },
+        "requiredAssets": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "exclusions": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

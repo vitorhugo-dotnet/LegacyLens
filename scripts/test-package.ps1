@@ -5,6 +5,10 @@ $PSNativeCommandUseErrorActionPreference = $false
 $package = (Resolve-Path $PackageDirectory).Path
 $exe = Join-Path $package 'legacylens.exe'
 if (-not (Test-Path $exe)) { throw 'Packaged core executable is missing.' }
+$hostExe = Join-Path $package 'legacylens-host.exe'
+if (-not (Test-Path $hostExe)) { throw 'Packaged native messaging host executable is missing.' }
+$extensionManifest = Join-Path $package 'extension/manifest.json'
+if (-not (Test-Path $extensionManifest)) { throw 'Packaged browser extension is missing.' }
 $analyzerJar = Join-Path $package 'analyzer/legacylens-analyzer.jar'
 if (-not (Test-Path $analyzerJar)) { throw 'Packaged Java analyzer is missing.' }
 $temp = Join-Path ([IO.Path]::GetTempPath()) ("LegacyLens smoke " + [guid]::NewGuid().ToString('N'))
@@ -27,7 +31,7 @@ try {
   if (@($analyzerResult.symbols).Count -lt 1 -or @($analyzerResult.PSObject.Properties.Name | Where-Object { $_ -in @('symbols','relations','evidence','diagnostics') }).Count -ne 4) { throw 'Packaged Java analyzer returned an invalid AnalysisResult.' }
   $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
   $env:APPDATA = Join-Path $temp 'AppData'
-  if (Get-Command go,node -ErrorAction SilentlyContinue) { throw 'Go or Node remains available on the smoke-test PATH.' }
+  if (Get-Command go,node,codeql -ErrorAction SilentlyContinue) { throw 'Go, Node, or CodeQL remains available on the smoke-test PATH.' }
   $server = Start-Process -FilePath $exe -ArgumentList 'serve' -PassThru -WindowStyle Hidden -WorkingDirectory $package
   $healthy = $false
   for ($attempt = 0; $attempt -lt 30; $attempt++) {
