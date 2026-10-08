@@ -5,6 +5,18 @@ import { CaptureController, type ActiveCapture } from '../src/capture/session.ts
 
 const client = new NativeClient();
 const stateKey = 'legacylens.activeCaptures.v1';
+const selectedProjectsKey = 'legacylens.selectedProjects.v1';
+const rootMenuId = 'legacylens.root';
+const statusMenuId = 'legacylens.status';
+const startMenuId = 'legacylens.capture.start';
+const stopMenuId = 'legacylens.capture.stop';
+const manageMenuId = 'legacylens.projects.manage';
+const pagePatterns = ['http://*/*', 'https://*/*'];
+// @types/chrome currently omits the documented dynamic-menu lifecycle API.
+const dynamicContextMenus = chrome.contextMenus as typeof chrome.contextMenus & {
+  onShown: { addListener(listener: (info: unknown, tab?: chrome.tabs.Tab) => void): void };
+  refresh(): Promise<void> | void;
+};
 const controller = new CaptureController(client, {
   async load() { return ((await chrome.storage.session.get(stateKey))[stateKey] ?? []) as ActiveCapture[]; },
   async save(entries) { await chrome.storage.session.set({ [stateKey]: entries }); },
@@ -15,47 +27,171 @@ function originOf(url?: string): string | undefined {
   try { const parsed = new URL(url); return ['https:', 'http:'].includes(parsed.protocol) ? parsed.origin : undefined; } catch { return undefined; }
 }
 
-const captureMenuId = 'legacylens.capture';
+function createMenu(properties: chrome.contextMenus.CreateProperties): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chrome.contextMenus.create(properties, () => {
+      const error = chrome.runtime.lastError;
+      if (error) reject(new Error(error.message));
+      else resolve();
+    });
+  });
+}
 
-async function openSelection(tab?: chrome.tabs.Tab): Promise<void> {
-  if (tab?.id === undefined) return;
-  const origin = originOf(tab.url);
-  if (!origin) {
-    await chrome.action.setBadgeText({ tabId: tab.id, text: 'N/A' });
-    return;
-  }
+function removeAllMenus(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chrome.contextMenus.removeAll(() => {
+      const error = chrome.runtime.lastError;
+      if (error) reject(new Error(error.message));
+      else resolve();
+    });
+  });
+}
 
-  const selected = new URL(origin);
-  const permission = { origins: [`${selected.protocol}//${selected.hostname}/*`] };
-  // Request permission before the first await so Chrome can associate it with
-  // the toolbar or context-menu click that initiated this flow.
-  if (!(await chrome.permissions.request(permission))) return;
+async function openInvestigation(projectId?: string, traceId?: string): Promise<void> {
+  const url = new URL(chrome.runtime.getURL('investigation.html'));
+  if (projectId) url.searchParams.set('projectId', projectId);
+  if (traceId) url.searchParams.set('traceId', traceId);
+  await chrome.tabs.create({ url: url.toString() });
+}
 
+async function selectedProjectFor(tabId: number): Promise<string | undefined> {
+  const selected = ((await chrome.storage.session.get(selectedProjectsKey))[selectedProjectsKey] ?? {}) as Record<string, string>;
+  return selected[String(tabId)];
+}
+
+async function renderMenu(tab?: chrome.tabs.Tab): Promise<void> {
+  const tabId = tab?.id;
+  const selectedId = tabId === undefined ? undefined : await selectedProjectFor(tabId);
+  const active = tabId === undefined ? undefined : controller.get(tabId);
+  let projects: ProjectListResult | undefined;
+  let hostError = false;
   try {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-scripts/content.js'] });
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-scripts/page.js'], world: 'MAIN' });
-    await chrome.tabs.sendMessage(tab.id, { type: 'selection.open' });
-    await chrome.action.setBadgeText({ tabId: tab.id, text: '' });
+    projects = await client.request<ProjectListResult>('project.list', { offset: 0, limit: 200 });
   } catch {
-    await chrome.action.setBadgeText({ tabId: tab.id, text: 'ERR' });
+    hostError = true;
   }
+
+  await removeAllMenus();
+  const nextProjectMap = new Map<string, string>();
+  await createMenu({ id: rootMenuId, title: 'LegacyLens', contexts: ['page'], documentUrlPatterns: pagePatterns });
+
+  if (hostError) {
+    await createMenu({ id: statusMenuId, parentId: rootMenuId, title: 'Host nativo desconectado', enabled: false, contexts: ['page'], documentUrlPatterns: pagePatterns });
+  } else if (!projects?.items.length) {
+    await createMenu({ id: statusMenuId, parentId: rootMenuId, title: 'Nenhum projeto registrado', enabled: false, contexts: ['page'], documentUrlPatterns: pagePatterns });
+  } else {
+    for (const [index, project] of projects.items.entries()) {
+      const id = `legacylens.project.${index}`;
+      nextProjectMap.set(id, project.id);
+      await createMenu({ id, parentId: rootMenuId, type: 'radio', title: project.name, checked: project.id === selectedId,
+        contexts: ['page'], documentUrlPatterns: pagePatterns });
+    }
+  }
+
+  const selectedProjectExists = Boolean(projects?.items.some((project) => project.id === selectedId));
+  await createMenu({ id: startMenuId, parentId: rootMenuId, title: 'Iniciar captura', enabled: selectedProjectExists && !active,
+    contexts: ['page'], documentUrlPatterns: pagePatterns });
+  await createMenu({ id: stopMenuId, parentId: rootMenuId, title: 'Parar captura', enabled: Boolean(active),
+    contexts: ['page'], documentUrlPatterns: pagePatterns });
+  await createMenu({ id: manageMenuId, parentId: rootMenuId, title: 'Gerenciar projetos', contexts: ['page'], documentUrlPatterns: pagePatterns });
+  // `removeAll` clears stale items across extension reloads; this map resolves this render's radio entries.
+  projectMenuMap.clear();
+  for (const [menuId, projectId] of nextProjectMap) projectMenuMap.set(menuId, projectId);
+  await dynamicContextMenus.refresh();
+}
+
+const projectMenuMap = new Map<string, string>();
+let pendingMenuRender = Promise.resolve();
+
+function queueMenuRender(tab?: chrome.tabs.Tab): Promise<void> {
+  const next = pendingMenuRender.catch(() => {}).then(() => renderMenu(tab));
+  pendingMenuRender = next;
+  return next;
+}
+
+async function startCapture(tab?: chrome.tabs.Tab): Promise<void> {
+  const tabId = tab?.id;
+  const origin = originOf(tab?.url);
+  if (tabId === undefined || !origin) return;
+
+  // Invoke permissions.request synchronously in this menu click handler so the browser keeps the user gesture.
+  try {
+    const parsed = new URL(origin);
+    const permissionRequest = chrome.permissions.request({ origins: [`${parsed.protocol}//${parsed.hostname}/*`] });
+    if (!await permissionRequest) return;
+    const projectId = await selectedProjectFor(tabId);
+    if (!projectId) throw new Error('Selecione um projeto LegacyLens no submenu.');
+    const projects = await client.request<ProjectListResult>('project.list', { offset: 0, limit: 200 });
+    if (!projects.items.some((project) => project.id === projectId)) throw new Error('O projeto selecionado não está mais registrado.');
+
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/content.js'] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/page.js'], world: 'MAIN' });
+    const session = await controller.start({ projectId, tabId, origin });
+    try {
+      const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.begin', projectId, session }) as { ok?: boolean; error?: string };
+      if (reply?.error || !reply?.ok) throw new Error(reply?.error ?? 'Content script did not acknowledge capture start');
+    } catch (error) {
+      await controller.stop(tabId);
+      throw error;
+    }
+    await chrome.action.setBadgeText({ tabId, text: '' });
+  } catch (error) {
+    console.error('LegacyLens could not start capture', error);
+    await chrome.action.setBadgeText({ tabId, text: 'ERR' });
+  }
+}
+
+async function stopCapture(tab?: chrome.tabs.Tab): Promise<void> {
+  const tabId = tab?.id;
+  if (tabId === undefined) return;
+  try {
+    await controller.restore();
+    const active = controller.get(tabId);
+    if (!active) return;
+    await controller.stop(tabId);
+    try { await chrome.tabs.sendMessage(tabId, { type: 'capture.end', traceId: active.session.id }); }
+    catch (error) { console.info('LegacyLens stopped capture after the page content script became unavailable', error); }
+    await openInvestigation(active.request.projectId, active.session.id);
+    await chrome.action.setBadgeText({ tabId, text: '' });
+  } catch (error) {
+    console.error('LegacyLens could not stop capture', error);
+    await chrome.action.setBadgeText({ tabId, text: 'ERR' });
+  }
+}
+
+async function selectProject(menuId: string, tab?: chrome.tabs.Tab): Promise<void> {
+  const tabId = tab?.id;
+  const projectId = projectMenuMap.get(menuId);
+  if (tabId === undefined || !projectId) return;
+  const selected = ((await chrome.storage.session.get(selectedProjectsKey))[selectedProjectsKey] ?? {}) as Record<string, string>;
+  await chrome.storage.session.set({ [selectedProjectsKey]: { ...selected, [String(tabId)]: projectId } });
+  await queueMenuRender(tab);
 }
 
 export default defineBackground(() => {
   void controller.restore();
-  chrome.runtime.onInstalled.addListener(() => {
-    chrome.contextMenus.removeAll(() => {
-      chrome.contextMenus.create({
-        id: captureMenuId,
-        title: 'LegacyLens: capturar interação',
-        contexts: ['page'],
-        documentUrlPatterns: ['http://*/*', 'https://*/*'],
-      });
-    });
+  const initializeMenu = () => {
+    void queueMenuRender().catch((error) => console.error('LegacyLens could not initialize context menu', error));
+  };
+  chrome.runtime.onInstalled.addListener(initializeMenu);
+  chrome.runtime.onStartup.addListener(initializeMenu);
+  dynamicContextMenus.onShown.addListener((_info, tab) => {
+    void controller.restore().then(() => queueMenuRender(tab)).catch((error) => console.error('LegacyLens could not refresh context menu', error));
   });
-  chrome.action.onClicked.addListener((tab) => { void openSelection(tab); });
+  chrome.action.onClicked.addListener(() => { void openInvestigation().catch((error) => console.error('LegacyLens could not open investigation', error)); });
   chrome.contextMenus.onClicked.addListener((info, tab) => {
-    if (info.menuItemId === captureMenuId) void openSelection(tab);
+    const menuId = String(info.menuItemId);
+    if (projectMenuMap.has(menuId)) void selectProject(menuId, tab).catch((error) => console.error('LegacyLens project selection failed', error));
+    else if (menuId === startMenuId) void startCapture(tab);
+    else if (menuId === stopMenuId) void stopCapture(tab);
+    else if (menuId === manageMenuId) void openInvestigation().catch((error) => console.error('LegacyLens could not open project management', error));
+  });
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    void chrome.storage.session.get(selectedProjectsKey).then((stored) => {
+      const selected = (stored[selectedProjectsKey] ?? {}) as Record<string, string>;
+      delete selected[String(tabId)];
+      return chrome.storage.session.set({ [selectedProjectsKey]: selected });
+    }).catch((error) => console.warn('LegacyLens could not clear closed-tab project selection', error));
   });
 
   chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
@@ -64,23 +200,6 @@ export default defineBackground(() => {
     const senderOrigin = originOf(sender.url);
     if (tabId === undefined || !senderOrigin || !msg || typeof msg.type !== 'string') return;
     const run = async () => {
-      if (msg.type === 'projects.list') return client.request<ProjectListResult>('project.list', { offset: typeof msg.offset === 'number' ? msg.offset : 0, limit: 200 });
-      if (msg.type === 'projects.open') {
-        await chrome.tabs.create({ url: chrome.runtime.getURL('investigation.html') });
-        return { opened: true };
-      }
-      if (msg.type === 'investigation.open' && typeof msg.projectId === 'string' && /^[a-f0-9]{32}$/i.test(String(msg.traceId))) {
-        const url = new URL(chrome.runtime.getURL('investigation.html'));
-        url.searchParams.set('projectId', msg.projectId);
-        url.searchParams.set('traceId', String(msg.traceId));
-        await chrome.tabs.create({ url: url.toString() });
-        return { opened: true };
-      }
-      if (msg.type === 'capture.start' && typeof msg.projectId === 'string') {
-        const session = await controller.start({ projectId: msg.projectId, tabId, origin: senderOrigin });
-        return { session, gap: false };
-      }
-      if (msg.type === 'capture.stop') { await controller.stop(tabId); return { stopped: true }; }
       if (msg.type === 'capture.event' && typeof msg.kind === 'string' && typeof msg.sessionId === 'string') {
         await controller.restore();
         const active = controller.get(tabId);
