@@ -19,7 +19,12 @@ const fixtureMode = (() => {
   try { return chrome.runtime.getManifest().host_permissions?.includes('http://127.0.0.1/*') === true; }
   catch { return false; }
 })();
-type FixtureDebugGlobal = typeof globalThis & { __legacylensFixturePhase?: string; __legacyLensCaptureDiagnostics?: ReturnType<typeof fixtureDiagnosticRecords> };
+type FixtureDebugGlobal = typeof globalThis & {
+  __legacylensFixturePhase?: string;
+  __legacylensFixtureRuntimeConnectRegistered?: boolean;
+  __legacylensFixtureRuntimeConnectCount?: number;
+  __legacyLensCaptureDiagnostics?: ReturnType<typeof fixtureDiagnosticRecords>;
+};
 function fixtureDiagnosticRecords() { return [] as Array<import('../src/capture/diagnostics.ts').CaptureStageRecord>; }
 function setFixturePhase(phase: string): void {
   (globalThis as FixtureDebugGlobal).__legacylensFixturePhase = phase;
@@ -220,6 +225,10 @@ async function selectProject(menuId: string, tab?: chrome.tabs.Tab): Promise<voi
 
 export default defineBackground(() => {
   if (fixtureMode) {
+    globalThis.addEventListener('error', (event) => setFixturePhase(`uncaught:${event.message.slice(0, 120)}`));
+    globalThis.addEventListener('unhandledrejection', () => setFixturePhase('unhandled-rejection'));
+  }
+  if (fixtureMode) {
     (globalThis as FixtureDebugGlobal & {
       __legacyLensFixtureCapture?: (request: { action: 'start' | 'stop'; tabId: number; projectId?: string }) => Promise<{ ok: true; session?: CaptureSession }>;
     }).__legacyLensFixtureCapture = async ({ action, tabId, projectId }) => {
@@ -235,8 +244,11 @@ export default defineBackground(() => {
         const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.begin', projectId, session, origin, tabId }) as { ok?: boolean; error?: string };
         if (reply?.error || !reply?.ok) {
           await controller.stop(tabId);
-          const phase = (globalThis as FixtureDebugGlobal).__legacylensFixturePhase ?? 'unknown';
-          throw new Error(`${reply?.error ?? 'Content script did not acknowledge fixture capture'} (background phase: ${phase})`);
+          const debug = globalThis as FixtureDebugGlobal;
+          const phase = debug.__legacylensFixturePhase ?? 'unknown';
+          const listener = debug.__legacylensFixtureRuntimeConnectRegistered === true;
+          const connections = debug.__legacylensFixtureRuntimeConnectCount ?? 0;
+          throw new Error(`${reply?.error ?? 'Content script did not acknowledge fixture capture'} (phase: ${phase}; onConnect registered: ${listener}; calls: ${connections})`);
         }
         return { ok: true, session };
       }
@@ -280,6 +292,8 @@ export default defineBackground(() => {
 
   chrome.runtime.onConnect.addListener((port) => {
     if (fixtureMode) {
+      const debug = globalThis as FixtureDebugGlobal;
+      debug.__legacylensFixtureRuntimeConnectCount = (debug.__legacylensFixtureRuntimeConnectCount ?? 0) + 1;
       setFixturePhase(`port.connect:${port.name}`);
       console.info(`LegacyLens fixture port connected: ${port.name}`);
     }
@@ -300,6 +314,7 @@ export default defineBackground(() => {
       capturePortsByTab.set(tabId, cleanups);
     }
   });
+  if (fixtureMode) (globalThis as FixtureDebugGlobal).__legacylensFixtureRuntimeConnectRegistered = true;
 
   chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
     const msg = message as Record<string, unknown>;
