@@ -35,7 +35,7 @@ O E2E requer Chromium de teste e a fixture local Maven. O empacotamento inicial 
 ./scripts/package-release.ps1
 ```
 
-Esse pacote é experimental e não promete instalador, registro automático do host ou compatibilidade validada com uma máquina privada. A extensão deve ser carregada como unpacked e sua identidade precisa corresponder à configuração do host antes de uma futura instalação assistida.
+O pacote Windows não instala a extensão nem registra o host automaticamente: carregue `extension` como unpacked e execute o script de registro do host. O ID da extensão deve ser usado tanto no registro (`-ExtensionId`) quanto ao iniciar o core (`LEGACYLENS_EXTENSION_ID`), conforme os passos abaixo.
 
 ## Como usar
 
@@ -52,10 +52,10 @@ Esse pacote é experimental e não promete instalador, registro automático do h
 
    O ID precisa ser informado ao `serve` para autorizar a origem da extensão na API local. A variável vale para essa janela do PowerShell.
 
-4. Deixe o terminal com `serve` aberto e abra a aplicação JSF. Clique com o botão direito na página e abra o submenu **LegacyLens**. Escolha o projeto na lista; essa seleção vale somente para a aba atual. Abra o submenu novamente e escolha **Iniciar captura**. Na primeira captura do site, autorize o acesso solicitado pelo navegador, selecione o elemento JSF e realize a interação.
+4. Deixe o terminal com `serve` aberto e abra a aplicação JSF. Clique com o botão direito na página e abra o submenu **LegacyLens**. Aguarde a lista de projetos aparecer e escolha o projeto; essa seleção vale somente para a aba atual. Abra o submenu novamente e escolha **Iniciar captura**. Na primeira captura do site, autorize o acesso solicitado pelo navegador, clique no elemento JSF a observar e realize a interação na aplicação.
 5. Para encerrar, abra o submenu **LegacyLens** e escolha **Parar captura**. A página de investigação será aberta para o projeto e a captura. Use **Gerenciar projetos** no submenu ou clique no ícone da extensão para cadastrar projetos, indexar código e pesquisar resultados. Os dados do projeto ficam na máquina local.
 
-`legacylens.exe status` verifica se a API HTTP local está respondendo. A extensão também precisa do host de mensagens nativas registrado para o ID correto; portanto, o core pode estar saudável e o menu ainda mostrar **Host nativo desconectado**. Consulte [Diagnóstico do host nativo](docs/user/windows-installation.md#diagnostico-do-host-nativo) nesse caso.
+`legacylens.exe status` verifica se a API HTTP local está respondendo. A extensão também precisa do host de mensagens nativas registrado para o ID correto e do core iniciado com esse mesmo ID; portanto, o core pode estar saudável e o menu ainda mostrar **Host nativo desconectado**. Se esse aviso aparecer, pare o `serve` atual e repita o passo 3 usando o ID da extensão carregada. Consulte [Diagnóstico do host nativo](docs/user/windows-installation.md#diagnostico-do-host-nativo) se continuar desconectado.
 
 ### Publicação de releases
 
