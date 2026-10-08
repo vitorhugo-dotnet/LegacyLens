@@ -349,7 +349,9 @@ export default defineBackground(() => {
           const messages = debug.__legacylensFixtureRuntimeMessageCount ?? 0;
           const storageRequests = debug.__legacylensFixtureStorageRequestCount ?? 0;
           const storageChanges = debug.__legacylensFixtureStorageChangeCount ?? 0;
-          throw new Error(`${reply?.error ?? 'Content script did not acknowledge fixture capture'} (phase: ${phase}; onConnect registered: ${listener}; calls: ${connections}; onMessage registered: ${messageListener}; calls: ${messages}; storage changes: ${storageChanges}; valid storage requests: ${storageRequests})`);
+          const stored = await chrome.storage.local.get(null);
+          const pendingStorageKeys = Object.keys(stored).filter((key) => key.startsWith(CAPTURE_TRANSPORT_STORAGE_PREFIX)).length;
+          throw new Error(`${reply?.error ?? 'Content script did not acknowledge fixture capture'} (phase: ${phase}; onConnect registered: ${listener}; calls: ${connections}; onMessage registered: ${messageListener}; calls: ${messages}; storage changes: ${storageChanges}; valid storage requests: ${storageRequests}; pending outbox keys: ${pendingStorageKeys})`);
         }
         return { ok: true, session };
       }
