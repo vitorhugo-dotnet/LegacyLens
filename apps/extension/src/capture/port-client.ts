@@ -12,6 +12,10 @@ export interface CapturePortLike {
   onDisconnect: { addListener(listener: () => void): void; removeListener(listener: () => void): void };
 }
 interface Pending { event: CapturePortEvent; resolve(value: CapturePortAcknowledgement): void; reject(error: Error): void; settled: boolean }
+interface CapturePortTimers {
+  setTimeout(handler: () => void, timeout: number): ReturnType<typeof setTimeout>;
+  clearTimeout(timer: ReturnType<typeof setTimeout>): void;
+}
 function randomEventId(): string {
   let id = '';
   do { id = [...crypto.getRandomValues(new Uint8Array(8))].map((n) => n.toString(16).padStart(2, '0')).join(''); } while (/^0+$/.test(id));
@@ -36,9 +40,16 @@ export class CapturePortClient {
   private startReject: ((error: Error) => void) | undefined;
   private readonly drainWaiters = new Set<() => void>();
 
+  private readonly timers: CapturePortTimers;
+
   constructor(private readonly connect: (name: string) => CapturePortLike,
     private readonly diagnostics: (stage: string, eventId?: string, code?: string) => void = () => {},
-    private readonly timers = { setTimeout, clearTimeout }) {}
+    timers?: CapturePortTimers) {
+    this.timers = timers ?? {
+      setTimeout: (handler: () => void, timeout: number) => globalThis.setTimeout(handler, timeout),
+      clearTimeout: (timer) => globalThis.clearTimeout(timer),
+    };
+  }
 
   start(traceId: string): Promise<void> {
     if (this.startPromise) return this.startPromise;

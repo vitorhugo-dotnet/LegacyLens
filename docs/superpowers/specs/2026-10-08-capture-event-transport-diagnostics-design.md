@@ -85,7 +85,7 @@ Os sinais de diagnóstico devem ficar restritos ao build de fixture/teste ou usa
 
 ### Resultado da instrumentação
 
-O run `1381b09` classificou a falha na fronteira de entrega/resposta content→background. Para o mesmo trace e evento:
+O run `1381b09` classificou a primeira falha na fronteira de entrega/resposta content→background. Após a implementação inicial do Port, o run `37821931816` confirmou que os checks unitários e o Go core passaram, mas os dois E2E falharam durante `capture.begin` com `Illegal invocation`, antes de a captura iniciar. A inspeção local atribuiu isso ao vínculo incorreto dos timers globais no cliente; o callback agora chama `globalThis.setTimeout/clearTimeout` pelo receiver correto. A correção aguarda nova execução no CI. Para o trace one-shot original:
 
 - `content.selection.accepted` e `content.send.started` foram registrados;
 - nenhum `background.receive` foi registrado;
@@ -147,4 +147,4 @@ O gatilho foi atendido pelo run `1381b09`. O usuário aprovou a execução diret
 
 ## Estado de validação da Fase 2
 
-O plano implementa fila FIFO de até 100 eventos, até três reconexões, replay com o mesmo `eventId`, ACK após aceite do host, validação de duplicidade do core e limpeza no stop/fechamento/navegação. Localmente passaram os testes da extensão, typecheck, build da fixture e descoberta dos cinco E2E. Os fluxos E2E Windows e o teste Go de persistência ainda precisam ser confirmados pelo CI após o push.
+O plano implementa fila FIFO de até 100 eventos, até três reconexões, replay com o mesmo `eventId`, ACK após aceite do host, validação de duplicidade do core e limpeza no stop/fechamento/navegação. A primeira execução após o Port (`37821931816`) passou nos checks requeridos, inclusive Go, mas ambos os E2E encontraram `Illegal invocation` ao iniciar a captura. O cliente foi corrigido para vincular os timers ao global. Os testes unitários, typecheck, build e E2E discovery locais passaram antes da correção; é necessário repetir e aguardar o próximo CI Windows para confirmar os dois E2E.
