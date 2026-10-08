@@ -2,13 +2,8 @@ import { defineContentScript } from 'wxt/utils/define-content-script';
 import type { CaptureSession } from '@legacylens/contracts/src/protocol.ts';
 import { chooseElement } from '../src/capture/selection.ts';
 import { toStackMetadata } from '../src/capture/stack.ts';
-
-type Reply<T> = T | { error: string };
-async function ask<T>(message: object): Promise<T> {
-  const reply = await chrome.runtime.sendMessage(message) as Reply<T>;
-  if (reply && typeof reply === 'object' && 'error' in reply) throw new Error(reply.error);
-  return reply as T;
-}
+import { recordCaptureStage } from '../src/capture/diagnostics.ts';
+import { requestCaptureEvent } from '../src/capture/messages.ts';
 
 export default defineContentScript({
   matches: ['http://*/*', 'https://*/*'],
@@ -19,6 +14,7 @@ export default defineContentScript({
     global.__legacylensContentScriptInstalled = true;
 
     let session: CaptureSession | undefined;
+    let captureTabId = -1;
     let nonce = '';
     let selectedSource = '';
     let clickEventId = '';
@@ -26,9 +22,13 @@ export default defineContentScript({
     const resetCapture = () => {
       stopChoosing?.(); stopChoosing = undefined;
       if (nonce) window.dispatchEvent(new CustomEvent('legacylens:stop', { detail: { nonce } }));
-      session = undefined; selectedSource = ''; clickEventId = ''; nonce = '';
+      session = undefined; captureTabId = -1; selectedSource = ''; clickEventId = ''; nonce = '';
     };
-    const beginCapture = (projectId: string, nextSession: CaptureSession, expectedOrigin: string) => {
+    const sendCaptureEvent = (message: { type: 'capture.event'; sessionId: string; kind: string; eventId?: string; parentEventId?: string; metadata: Record<string, string> }) =>
+      requestCaptureEvent((payload) => chrome.runtime.sendMessage(payload), message,
+        { traceId: message.sessionId, tabId: captureTabId },
+        (record) => recordCaptureStage(record, chrome.runtime.getManifest() as { host_permissions?: string[] }));
+    const beginCapture = (projectId: string, nextSession: CaptureSession, expectedOrigin: string, tabId: number) => {
       const expiresAt = Date.parse(nextSession.expiresAt);
       if (nextSession.projectId !== projectId || !/^[a-f0-9]{32}$/i.test(nextSession.id)
         || !Number.isFinite(expiresAt) || expiresAt <= Date.now() || expectedOrigin !== location.origin) {
@@ -37,6 +37,7 @@ export default defineContentScript({
       if (session?.id === nextSession.id) return;
       resetCapture();
       session = nextSession;
+      captureTabId = tabId;
       nonce = [...crypto.getRandomValues(new Uint8Array(16))].map((n) => n.toString(16).padStart(2, '0')).join('');
       window.dispatchEvent(new CustomEvent('legacylens:start', { detail: { nonce, traceId: session.id, origin: location.origin } }));
       stopChoosing = chooseElement(document, (id) => {
@@ -44,16 +45,16 @@ export default defineContentScript({
         do { clickEventId = [...crypto.getRandomValues(new Uint8Array(8))].map((byte) => byte.toString(16).padStart(2, '0')).join(''); }
         while (/^0+$/.test(clickEventId));
         window.dispatchEvent(new CustomEvent('legacylens:select', { detail: { nonce, source: id } }));
-        void ask({ type: 'capture.event', sessionId: session!.id, kind: 'jsf.click', eventId: clickEventId, metadata: { source: id } })
+        void sendCaptureEvent({ type: 'capture.event', sessionId: session!.id, kind: 'jsf.click', eventId: clickEventId, metadata: { source: id } })
           .catch((error) => console.warn('LegacyLens capture event failed', error));
       });
     };
     chrome.runtime.onMessage.addListener((message: unknown, _sender, respond) => {
-      const msg = message as { type?: unknown; projectId?: unknown; session?: unknown; origin?: unknown; traceId?: unknown };
+      const msg = message as { type?: unknown; projectId?: unknown; session?: unknown; origin?: unknown; tabId?: unknown; traceId?: unknown };
       try {
         if (msg?.type === 'capture.begin' && typeof msg.projectId === 'string' && typeof msg.origin === 'string'
-          && msg.session && typeof msg.session === 'object') {
-          beginCapture(msg.projectId, msg.session as CaptureSession, msg.origin);
+          && Number.isSafeInteger(msg.tabId) && (msg.tabId as number) >= 0 && msg.session && typeof msg.session === 'object') {
+          beginCapture(msg.projectId, msg.session as CaptureSession, msg.origin, msg.tabId as number);
           respond({ ok: true });
         } else if (msg?.type === 'capture.end' && typeof msg.traceId === 'string') {
           if (!session || session.id === msg.traceId) resetCapture();
@@ -69,19 +70,19 @@ export default defineContentScript({
       const detail = (event as CustomEvent).detail as { nonce?: string; source?: string; propagation?: string; traceparent?: string; spanId?: string; code?: string };
       if (!session || !detail || detail.nonce !== nonce) return;
       if (typeof detail.code === 'string' && /^UNSUPPORTED_[A-Z_]+$/.test(detail.code)) {
-        void ask({ type: 'capture.event', sessionId: session.id, kind: 'extension.diagnostic', metadata: { code: detail.code } }).catch(() => {});
+        void sendCaptureEvent({ type: 'capture.event', sessionId: session.id, kind: 'extension.diagnostic', metadata: { code: detail.code } }).catch(() => {});
         console.warn('LegacyLens: page does not expose the supported PrimeFaces Ajax API.');
         return;
       }
       if (typeof detail.source !== 'string' || detail.source.length > 256) return;
       if (detail.source !== selectedSource || !clickEventId) return;
       if (detail.propagation === 'attempted' && !detail.spanId && !detail.traceparent) {
-        void ask({ type: 'capture.event', sessionId: session.id, kind: 'primefaces.propagation_attempt', parentEventId: clickEventId, metadata: { source: detail.source } }).catch((error) => console.warn('LegacyLens capture transport interrupted', error));
+        void sendCaptureEvent({ type: 'capture.event', sessionId: session.id, kind: 'primefaces.propagation_attempt', parentEventId: clickEventId, metadata: { source: detail.source } }).catch((error) => console.warn('LegacyLens capture transport interrupted', error));
         return;
       }
       if (detail.propagation !== 'propagated' || !detail.traceparent || !detail.spanId) return;
       if (detail.traceparent !== `00-${session.id}-${detail.spanId}-01` || !/^[a-f0-9]{16}$/i.test(detail.spanId)) return;
-      void ask({ type: 'capture.event', sessionId: session.id, kind: 'primefaces.ajax', parentEventId: clickEventId, metadata: { source: detail.source, spanId: detail.spanId } }).catch((error) => console.warn('LegacyLens capture transport interrupted', error));
+      void sendCaptureEvent({ type: 'capture.event', sessionId: session.id, kind: 'primefaces.ajax', parentEventId: clickEventId, metadata: { source: detail.source, spanId: detail.spanId } }).catch((error) => console.warn('LegacyLens capture transport interrupted', error));
     });
     window.addEventListener('legacylens:network', (event) => {
       const detail = (event as CustomEvent).detail as { nonce?: string; source?: string; transport?: string; propagation?: string;
@@ -96,7 +97,7 @@ export default defineContentScript({
       const metadata = { source: detail.source, transport: detail.transport,
         ...(propagated ? { spanId: detail.spanId } : {}),
         ...stack };
-      void ask({ type: 'capture.event', sessionId: session.id, kind: propagated ? 'browser.network' : 'browser.propagation_attempt',
+      void sendCaptureEvent({ type: 'capture.event', sessionId: session.id, kind: propagated ? 'browser.network' : 'browser.propagation_attempt',
         parentEventId: clickEventId, metadata }).catch((error) => console.warn('LegacyLens capture transport interrupted', error));
     });
   },
