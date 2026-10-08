@@ -12,11 +12,15 @@ const startMenuId = 'legacylens.capture.start';
 const stopMenuId = 'legacylens.capture.stop';
 const manageMenuId = 'legacylens.projects.manage';
 const pagePatterns = ['http://*/*', 'https://*/*'];
-const fixtureMode = chrome.runtime.getManifest().host_permissions?.includes('http://127.0.0.1/*') === true;
+const fixtureMode = (() => {
+  try { return chrome.runtime.getManifest().host_permissions?.includes('http://127.0.0.1/*') === true; }
+  catch { return false; }
+})();
 type FixtureDebugGlobal = typeof globalThis & { __legacylensFixturePhase?: string };
 function setFixturePhase(phase: string): void {
-  if (fixtureMode) (globalThis as FixtureDebugGlobal).__legacylensFixturePhase = phase;
+  (globalThis as FixtureDebugGlobal).__legacylensFixturePhase = phase;
 }
+setFixturePhase(fixtureMode ? 'manifest-fixture-enabled' : 'manifest-fixture-disabled');
 // @types/chrome currently omits the documented dynamic-menu lifecycle API.
 const dynamicContextMenus = chrome.contextMenus as typeof chrome.contextMenus & {
   onShown: { addListener(listener: (info: unknown, tab?: chrome.tabs.Tab) => void): void };
@@ -220,8 +224,11 @@ export default defineBackground(() => {
     const tabId = sender.tab?.id;
     const senderOrigin = originOf(sender.url);
     if (!msg || typeof msg.type !== 'string') return;
+    const fixtureRequest = msg.type.startsWith('fixture.capture.');
+    if (fixtureRequest) setFixturePhase('fixture-request:received');
     if (tabId === undefined || !senderOrigin) {
-      if (fixtureMode && msg.type.startsWith('fixture.capture.')) {
+      if (fixtureRequest) {
+        setFixturePhase('fixture-request:invalid-sender');
         respond({ error: `Invalid fixture sender context (tab=${tabId ?? 'missing'}, url=${sender.url ?? 'missing'})` });
         return false;
       }
@@ -269,7 +276,7 @@ export default defineBackground(() => {
       }
       throw new Error('Unsupported capture message');
     };
-    const fixtureCommand = fixtureMode && msg.type.startsWith('fixture.capture.');
+    const fixtureCommand = fixtureRequest;
     if (fixtureCommand) {
       const timer = setTimeout(() => {
         const phase = (globalThis as FixtureDebugGlobal).__legacylensFixturePhase ?? 'unknown';
