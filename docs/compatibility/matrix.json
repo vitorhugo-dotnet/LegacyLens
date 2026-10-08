@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-08",
+  "platform": {
+    "name": "Microsoft Windows 11 Home",
+    "architecture": "64-bit",
+    "version": "10.0.26200"
+  },
+  "results": [
+    {
+      "id": "legacy-java8-wildfly10",
+      "status": "verified",
+      "testedAt": "2026-10-08",
+      "stack": {
+        "javaRuntime": "1.8.0_462-b08",
+        "wildFly": "10.0.0.Final",
+        "faces": "2.2.12-jbossorg-2 20150729-1131",
+        "primeFaces": "5.3",
+        "mysql": "5.7.44",
+        "connectorJ": "5.1.49"
+      },
+      "versionSources": {
+        "javaRuntime": "System.getProperty(java.runtime.version) inside the deployed fixture",
+        "wildFly": "WildFly management CLI :product-info connected to the running process",
+        "faces": "Runtime Mojarra initialization in the WildFly deployment log; fixture also records package implementation version",
+        "primeFaces": "Runtime PrimeFaces initialization in the WildFly deployment log and fixture package metadata",
+        "mysql": "SELECT VERSION() executed against the fixture database",
+        "connectorJ": "DatabaseMetaData.getDriverVersion() on the JDBC connection used by the fixture"
+      },
+      "tests": ["tests/e2e/legacy-click.spec.ts"],
+      "baseline": {
+        "sampleCount": 1,
+        "captureToDaoEvidenceMs": 21152,
+        "eventsPerSelectedClick": 68,
+        "methodEvents": 26,
+        "staticRelations": 2
+      },
+      "capabilities": {
+        "primeFacesActionCapture": true,
+        "requestTraceCorrelation": true,
+        "javaBeanServiceDaoTrace": true,
+        "databaseWrite": true,
+        "staticRelationSearch": true,
+        "runtimeVersionDetection": true
+      },
+      "deploymentRevisionScenario": "not-run"
+    },
+    {
+      "id": "jakarta-java21-wildfly35",
+      "status": "verified",
+      "testedAt": "2026-10-08",
+      "stack": {
+        "javaRuntime": "21.0.5+11-LTS",
+        "wildFly": "35.0.0.Final",
+        "faces": "4.0.8",
+        "primeFaces": "15.0.0",
+        "mysql": "8.4.0",
+        "connectorJ": "8.4.0"
+      },
+      "versionSources": {
+        "javaRuntime": "System.getProperty(java.runtime.version) inside the deployed fixture",
+        "wildFly": "WildFly management CLI :product-info connected to the running process",
+        "faces": "Runtime Faces implementation package metadata and WildFly deployment log",
+        "primeFaces": "Runtime PrimeFaces package metadata and WildFly deployment log",
+        "mysql": "SELECT VERSION() executed against the fixture database",
+        "connectorJ": "DatabaseMetaData.getDriverVersion() on the JDBC connection used by the fixture"
+      },
+      "tests": ["tests/e2e/modern-click.spec.ts", "tests/e2e/redeploy.spec.ts"],
+      "baseline": {
+        "sampleCount": 1,
+        "captureToDaoEvidenceMs": 17709,
+        "eventsPerSelectedClick": 59,
+        "methodEvents": 26,
+        "staticRelations": 2
+      },
+      "capabilities": {
+        "jakartaFacesActionCapture": true,
+        "requestTraceCorrelation": true,
+        "javaBeanServiceDaoTrace": true,
+        "databaseWrite": true,
+        "staticRelationSearch": true,
+        "runtimeVersionDetection": true,
+        "redeployRevisionIsolation": true
+      },
+      "deploymentRevisionScenario": {
+        "revisionA": "modern-A",
+        "revisionB": "modern-B",
+        "result": "verified: revision B had a new deployment classloader; all B method evidence came from that loader and retained unique producer/event identities"
+      }
+    }
+  ],
+  "scope": {
+    "windows10": "not-validated-on-this-machine; required for Task 19",
+    "supportClaim": "These are verified reference combinations only. Other versions and app-server products remain unverified."
+  }
+}

@@ -12,7 +12,7 @@ foreach ($path in @($state.registryPaths)) {
 }
 if ($state.manifestPath -and [IO.Path]::GetFullPath([string]$state.manifestPath) -eq [IO.Path]::GetFullPath((Join-Path $cache 'io.legacylens.host.json'))) { Remove-Item -LiteralPath $state.manifestPath -Force -ErrorAction SilentlyContinue }
 if ($state.runtime -and $state.wildflyPath) {
-  $wildflyRoot = Split-Path -Path (Split-Path -Path ([string]$state.wildflyPath) -Parent) -Parent
+  $wildflyRoot = if ($state.wildflyRoot) { [IO.Path]::GetFullPath([string]$state.wildflyRoot) } else { Split-Path -Path (Split-Path -Path ([string]$state.wildflyPath) -Parent) -Parent }
   $agentArg = Join-Path ([string]$state.runtime) 'agent.jar'
   Get-CimInstance Win32_Process -Filter "name='java.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($agentArg) -and $_.CommandLine.Contains($wildflyRoot) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 }
@@ -22,8 +22,12 @@ foreach ($entry in @(@($state.wildflyPid,$state.wildflyPath),@($state.corePid,$s
   if ($process -and $process.CommandLine -and $process.CommandLine.Contains([string]$entry[1])) { Stop-Process -Id $entry[0] -Force }
 }
 if ($state.mysqlPid -and $state.mysqlPath) {
-  $expectedMysqlPath = [IO.Path]::GetFullPath((Join-Path $cache 'mysql57\mysql-5.7.44-winx64\bin\mysqld.exe'))
-  if ([IO.Path]::GetFullPath([string]$state.mysqlPath) -eq $expectedMysqlPath) {
+  $expectedMysqlPaths = @(
+    [IO.Path]::GetFullPath((Join-Path $cache 'mysql57\mysql-5.7.44-winx64\bin\mysqld.exe')),
+    [IO.Path]::GetFullPath((Join-Path $cache 'mysql84\mysql-8.4.0-winx64\bin\mysqld.exe'))
+  )
+  $expectedMysqlPath = $expectedMysqlPaths | Where-Object { [IO.Path]::GetFullPath([string]$state.mysqlPath) -eq $_ } | Select-Object -First 1
+  if ($expectedMysqlPath) {
     $mysqlProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($state.mysqlPid)" -ErrorAction SilentlyContinue
     if ($mysqlProcess -and [IO.Path]::GetFullPath([string]$mysqlProcess.ExecutablePath) -eq $expectedMysqlPath) {
       $mysqlHome = Split-Path -Path (Split-Path -Path $expectedMysqlPath -Parent) -Parent

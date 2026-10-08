@@ -1,7 +1,7 @@
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:h="http://java.sun.com/jsf/html" xmlns:p="http://primefaces.org/ui" xmlns:pt="http://xmlns.jcp.org/jsf/passthrough">
-<h:head><title>Legacy orders fixture</title></h:head><h:body>
-  <h:panelGroup id="runtimeInfo" layout="block" pt:data-java="#{orderBean.javaVersion}" pt:data-faces="#{orderBean.facesVersion}" pt:data-primefaces="#{orderBean.primeFacesVersion}" pt:data-mysql="#{orderBean.mysqlVersion}" pt:data-connector-j="#{orderBean.connectorJVersion}" />
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:h="jakarta.faces.html" xmlns:p="http://primefaces.org/ui" xmlns:pt="jakarta.faces.passthrough">
+<h:head><title>Modern orders fixture</title></h:head><h:body>
+  <h:panelGroup id="runtimeInfo" layout="block" pt:data-java="#{orderBean.javaVersion}" pt:data-faces="#{orderBean.facesVersion}" pt:data-primefaces="#{orderBean.primeFacesVersion}" pt:data-mysql="#{orderBean.mysqlVersion}" pt:data-connector-j="#{orderBean.connectorJVersion}" pt:data-build-revision="#{orderBean.buildRevision}" />
   <h:form id="orderForm">
     <h:inputText id="note" value="#{orderBean.note}" />
     <p:commandButton id="saveOrder" value="Save order" actionListener="#{orderBean.save}" update="result" onclick="fetch('orders.xhtml');" />

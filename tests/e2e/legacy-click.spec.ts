@@ -10,7 +10,7 @@ const cache = join(root, '.fixture-cache');
 const extension = join(root, 'apps/extension/.output/chrome-mv3');
 const extensionId = 'olmoddbhnipjpamkjngdefdfekjehbef';
 type Event = { eventId: string; parentEventId?: string; kind: string; metadata?: Record<string,string>; producerId: string };
-type Investigation = { events: {items: Event[]; total: number}; relations: {items: {kind:string;fromId:string;toId?:string}[]}; symbols: {items:{id:string;qualifiedName:string}[]}; agentStatus:{state:string;evidenceDiagnosticId?:string}; diagnostics:{items:{id:string;code:string}[]} };
+type Investigation = { events: {items: Event[]; total: number}; relations: {items: {kind:string;layer?:string;fromId:string;toId?:string}[]}; symbols: {items:{id:string;qualifiedName:string}[]}; agentStatus:{state:string;evidenceDiagnosticId?:string}; diagnostics:{items:{id:string;code:string}[]} };
 
 function run(command: string, args: string[], timeout = 180_000, env = process.env): void {
   mkdirSync(cache,{recursive:true});
@@ -42,7 +42,9 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
     run(process.execPath,[process.env.npm_execpath!,'run','build','--workspace','apps/extension'],60_000,{...process.env,LEGACYLENS_FIXTURE_EXTENSION:'1'});
     run('pwsh',['-NoProfile','-File',join(root,'scripts/fixtures/start-legacy.ps1'),'-ExtensionId',extensionId]);
     fixtureStarted = true;
-    const state = JSON.parse(readFileSync(join(cache,'state.json'),'utf8')) as {projectId:string;httpPort:number};
+    const state = JSON.parse(readFileSync(join(cache,'state.json'),'utf8')) as {projectId:string;httpPort:number;wildflyVersion:string;platform:{name:string;architecture:string;version:string}};
+    expect(state.wildflyVersion).toBe('10.0.0.Final');
+    expect(state.platform.architecture).toBe('64-bit');
     const discovery = JSON.parse(readFileSync(join(cache,'LegacyLens/discovery.json'),'utf8')) as {address:string;hostToken:string};
     const command = async (name:string,payload:Record<string,unknown>):Promise<any> => {
       const reply = await fetch(`http://${discovery.address}/v1/commands`,{method:'POST',headers:{Authorization:`Bearer ${discovery.hostToken}`,'Content-Type':'application/json'},body:JSON.stringify({protocolVersion:1,requestId:randomUUID(),command:name,payload})});
@@ -50,12 +52,17 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
       return (await reply.json()).result;
     };
     const investigation = (traceId:string) => command('investigation.get',{projectId:state.projectId,traceId,offset:0,limit:200}) as Promise<Investigation>;
+    await command('project.index',{projectId:state.projectId,paths:[],offset:0,limit:200});
     context = await chromium.launchPersistentContext(profile,{channel:'chromium',headless:true,env:{...process.env,APPDATA:cache},args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`]});
     const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker',{timeout:15_000});
     expect(new URL(worker.url()).hostname,'FIXTURE_SETUP: built extension ID differs from pinned native host origin').toBe(extensionId);
     const page = await context.newPage();
     const url = `http://127.0.0.1:${state.httpPort}/legacy-fixture/orders.xhtml`;
     await page.goto(url);
+    const runtime = await page.locator('#runtimeInfo').evaluate((node) => Object.fromEntries([...node.attributes].map((attribute) => [attribute.name, attribute.value])));
+    expect(runtime).toMatchObject({ 'data-java': '1.8.0_462-b08', 'data-primefaces': '5.3', 'data-mysql': '5.7.44' });
+    expect(runtime['data-connector-j']).toContain('5.1.49');
+    expect(runtime['data-faces']).toMatch(/^2\.2\./);
     await page.evaluate(() => {
       const probe: unknown[]=[];
       (window as any).__legacyLensProbe=probe;
@@ -88,6 +95,7 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
     await page.locator('#orderForm\\:note').fill('fixture-private-order-value');
     const observedRequests:{parent?:string}[]=[];
     page.on('request',(request)=>{if(request.url().includes('/legacy-fixture/orders.xhtml'))observedRequests.push({parent:request.headers()['traceparent']});});
+    const captureStartedAt = Date.now();
     await page.getByRole('button',{name:'Capture next interaction'}).click();
     await expect.poll(activeTrace,{timeout:15_000,message:'FIXTURE_SETUP: second native capture did not start'}).toMatch(/^[0-9a-f]{32}$/);
     const trace = await activeTrace();
@@ -126,6 +134,8 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
     await expect.poll(activeTrace,{timeout:15_000,message:'second capture did not stop'}).toBeUndefined();
     const result = await investigation(trace);
     expect(result.agentStatus.state).toBe('online');
+    expect(result.relations.items.some((relation)=>relation.layer==='static'),'the legacy project index should provide static search and impact relations').toBe(true);
+    console.log(`compatibility-baseline ${JSON.stringify({ id: 'legacy-java8-wildfly10', captureMs: Date.now() - captureStartedAt, eventCount: result.events.total, methodEventCount: result.events.items.filter((event)=>event.kind==='method.start').length, staticRelationCount: result.relations.items.filter((relation)=>relation.layer==='static').length })}`);
     expect(result.diagnostics.items.some((item)=>item.id===result.agentStatus.evidenceDiagnosticId&&item.code==='agent.heartbeat')).toBe(true);
     const events=result.events.items;
     expect(events.filter((event)=>event.kind==='agent.loss'),'Java agent must deliver the captured flow without loss').toHaveLength(0);

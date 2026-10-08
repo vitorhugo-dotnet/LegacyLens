@@ -1,0 +1,8 @@
+{
+  "java": {"version":"21.0.5+11","url":"https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_x64_windows_hotspot_21.0.5_11.zip","sha256":"6f09d4a3598542313cca1540106d537c7092a54e415d569f7b928160a90d3128"},
+  "wildfly": {"version":"35.0.0.Final","url":"https://github.com/wildfly/wildfly/releases/download/35.0.0.Final/wildfly-35.0.0.Final.zip","sha1":"4f40eac2940e22c2062dd4b67f177cd5cd3c85a4"},
+  "mysql": {"version":"8.4.0","url":"https://downloads.mysql.com/archives/get/p/23/file/mysql-8.4.0-winx64.zip","md5":"23fa293db80b5d49f9e97d34c2037a82"},
+  "jakartaFaces": {"version":"4.0","source":"WildFly 35 provided module; runtime version read from FacesContext package metadata"},
+  "primefaces": {"version":"15.0.0","classifier":"jakarta","source":"fixtures/modern/pom.xml"},
+  "connectorJ": {"version":"8.4.0","source":"fixtures/modern/pom.xml"}
+}
