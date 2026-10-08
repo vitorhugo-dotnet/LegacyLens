@@ -13,6 +13,10 @@ const stopMenuId = 'legacylens.capture.stop';
 const manageMenuId = 'legacylens.projects.manage';
 const pagePatterns = ['http://*/*', 'https://*/*'];
 const fixtureMode = chrome.runtime.getManifest().host_permissions?.includes('http://127.0.0.1/*') === true;
+type FixtureDebugGlobal = typeof globalThis & { __legacylensFixturePhase?: string };
+function setFixturePhase(phase: string): void {
+  if (fixtureMode) (globalThis as FixtureDebugGlobal).__legacylensFixturePhase = phase;
+}
 // @types/chrome currently omits the documented dynamic-menu lifecycle API.
 const dynamicContextMenus = chrome.contextMenus as typeof chrome.contextMenus & {
   onShown: { addListener(listener: (info: unknown, tab?: chrome.tabs.Tab) => void): void };
@@ -124,7 +128,9 @@ async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?
     }
     const projectId = options.projectId ?? await selectedProjectFor(tabId);
     if (!projectId) throw new Error('Selecione um projeto LegacyLens no submenu.');
+    setFixturePhase('project-list:pending');
     const projects = await client.request<ProjectListResult>('project.list', { offset: 0, limit: 200 });
+    setFixturePhase('project-list:complete');
     if (fixtureMode) console.info('LegacyLens fixture capture: project.list completed');
     if (!projects.items.some((project) => project.id === projectId)) throw new Error('O projeto selecionado não está mais registrado.');
 
@@ -132,7 +138,9 @@ async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?
       await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/content.js'] });
       await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/page.js'], world: 'MAIN' });
     }
+    setFixturePhase('capture-start:pending');
     const session = await controller.start({ projectId, tabId, origin });
+    setFixturePhase('capture-start:complete');
     if (fixtureMode) console.info('LegacyLens fixture capture: capture.start completed');
     if (options.notifyContent !== false) {
       try {
@@ -222,10 +230,14 @@ export default defineBackground(() => {
     const run = async () => {
       if (fixtureMode && msg.type === 'fixture.capture.start' && typeof msg.projectId === 'string') {
         console.info('LegacyLens fixture capture: start command received');
+        setFixturePhase('fixture-command:received');
         const selected = ((await chrome.storage.session.get(selectedProjectsKey))[selectedProjectsKey] ?? {}) as Record<string, string>;
+        setFixturePhase('fixture-selection:loaded');
         await chrome.storage.session.set({ [selectedProjectsKey]: { ...selected, [String(tabId)]: msg.projectId } });
+        setFixturePhase('fixture-selection:saved');
         const session = await startCapture(sender.tab, { requestPermission: false, projectId: msg.projectId, notifyContent: false, injectScripts: false });
         if (!session) throw new Error('Fixture capture did not start; inspect the extension service worker log.');
+        setFixturePhase('fixture-command:complete');
         return { ok: true, session };
       }
       if (fixtureMode && msg.type === 'fixture.capture.stop') {
@@ -257,7 +269,21 @@ export default defineBackground(() => {
       }
       throw new Error('Unsupported capture message');
     };
-    void run().then(respond, (error: unknown) => respond({ error: error instanceof Error ? error.message : 'Capture failed' }));
+    const fixtureCommand = fixtureMode && msg.type.startsWith('fixture.capture.');
+    if (fixtureCommand) {
+      const timer = setTimeout(() => {
+        const phase = (globalThis as FixtureDebugGlobal).__legacylensFixturePhase ?? 'unknown';
+        setFixturePhase('fixture-command:timeout');
+        respond({ error: `Fixture command timed out at ${phase}` });
+      }, 20_000);
+      void run().then((result) => { clearTimeout(timer); respond(result); }, (error: unknown) => {
+        clearTimeout(timer);
+        setFixturePhase('fixture-command:error');
+        respond({ error: error instanceof Error ? error.message : 'Fixture capture failed' });
+      });
+    } else {
+      void run().then(respond, (error: unknown) => respond({ error: error instanceof Error ? error.message : 'Capture failed' }));
+    }
     return true;
   });
 });
