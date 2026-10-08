@@ -118,13 +118,15 @@ export class CaptureController {
       kind, occurredAt: new Date().toISOString(), metadata };
     await this.persist();
     const correlation = { traceId: entry.session.id, tabId: entry.request.tabId, eventId: event.eventId };
+    const startedAt = Date.now();
     this.diagnostics({ stage: 'host.ingest', outcome: 'started', ...correlation });
     try {
       await this.client.request('trace.ingest', { projectId: entry.request.projectId, events: [event] });
-      this.diagnostics({ stage: 'host.ingest', outcome: 'accepted', ...correlation });
+      this.diagnostics({ stage: 'host.ingest', outcome: 'accepted', ...correlation, durationMs: Date.now() - startedAt });
     } catch (error) {
       const code = error instanceof NativeRequestError ? error.code.toUpperCase().replaceAll('-', '_') : 'NATIVE_ERROR';
-      this.diagnostics({ stage: 'host.ingest', outcome: error instanceof NativeRequestError && error.code === 'timeout' ? 'timeout' : 'rejected', ...correlation, code });
+      this.diagnostics({ stage: 'host.ingest', outcome: error instanceof NativeRequestError && error.code === 'timeout' ? 'timeout' : 'rejected',
+        ...correlation, durationMs: Date.now() - startedAt, code });
       throw error;
     }
   }

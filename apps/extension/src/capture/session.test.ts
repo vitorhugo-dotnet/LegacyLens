@@ -10,10 +10,10 @@ describe('CaptureController', () => {
     }, undefined, (record) => accepted.push(record));
     await successful.start({ projectId: 'project', tabId: 19, origin: 'https://app.example' });
     await successful.record(19, 'jsf.click', { source: 'sensitive-form-name' }, { eventId: 'b'.repeat(16) });
-    expect(accepted).toEqual([
-      { stage: 'host.ingest', outcome: 'started', traceId: 'a'.repeat(32), tabId: 19, eventId: 'b'.repeat(16) },
-      { stage: 'host.ingest', outcome: 'accepted', traceId: 'a'.repeat(32), tabId: 19, eventId: 'b'.repeat(16) },
-    ]);
+    expect(accepted).toHaveLength(2);
+    expect(accepted[0]).toEqual({ stage: 'host.ingest', outcome: 'started', traceId: 'a'.repeat(32), tabId: 19, eventId: 'b'.repeat(16) });
+    expect(accepted[1]).toMatchObject({ stage: 'host.ingest', outcome: 'accepted', traceId: 'a'.repeat(32), tabId: 19,
+      eventId: 'b'.repeat(16), durationMs: expect.any(Number) });
     expect(JSON.stringify(accepted)).not.toContain('sensitive-form-name');
 
     const timedOut: unknown[] = [];
@@ -24,7 +24,7 @@ describe('CaptureController', () => {
     await failed.start({ projectId: 'project', tabId: 20, origin: 'https://app.example' });
     await expect(failed.record(20, 'jsf.click', { source: 'another-secret' }, { eventId: 'd'.repeat(16) })).rejects.toThrow('transport interrupted');
     expect(timedOut.at(-1)).toEqual({ stage: 'host.ingest', outcome: 'timeout', traceId: 'c'.repeat(32), tabId: 20,
-      eventId: 'd'.repeat(16), code: 'TIMEOUT' });
+      eventId: 'd'.repeat(16), durationMs: expect.any(Number), code: 'TIMEOUT' });
     expect(JSON.stringify(timedOut)).not.toContain('private native detail');
     expect(JSON.stringify(timedOut)).not.toContain('another-secret');
   });

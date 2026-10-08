@@ -83,15 +83,18 @@ export async function handleCaptureEvent(
   if (safe.spanId && (!eventIdPattern.test(safe.spanId) || /^0+$/.test(safe.spanId))) return error('Capture span identity is invalid', 'SPAN_ID');
   if (msg.kind === 'browser.network' && (!safe.spanId || !['fetch', 'xhr'].includes(safe.transport ?? ''))) return error('Network effect is invalid', 'NETWORK_INVALID');
   if (msg.kind === 'browser.propagation_attempt' && safe.spanId) return error('Propagation attempt has an unverified span', 'SPAN_ID');
+  const recordStartedAt = Date.now();
   diagnostics({ stage: 'background.record', outcome: 'started', ...correlation });
   try {
     await controller.record(tabId, msg.kind, safe, { ...(eventId ? { eventId } : {}), ...(parentEventId ? { parentEventId } : {}) });
   } catch {
-    diagnostics({ stage: 'background.record', outcome: 'rejected', ...correlation, code: 'RECORD_FAILED' });
-    diagnostics({ stage: 'background.receive', outcome: 'rejected', ...correlation, code: 'RECORD_FAILED' });
+    const durationMs = Date.now() - recordStartedAt;
+    diagnostics({ stage: 'background.record', outcome: 'rejected', ...correlation, durationMs, code: 'RECORD_FAILED' });
+    diagnostics({ stage: 'background.receive', outcome: 'rejected', ...correlation, durationMs, code: 'RECORD_FAILED' });
     return error('Capture event could not be recorded', 'RECORD_FAILED');
   }
-  diagnostics({ stage: 'background.record', outcome: 'accepted', ...correlation });
-  diagnostics({ stage: 'background.receive', outcome: 'accepted', ...correlation });
+  const durationMs = Date.now() - recordStartedAt;
+  diagnostics({ stage: 'background.record', outcome: 'accepted', ...correlation, durationMs });
+  diagnostics({ stage: 'background.receive', outcome: 'accepted', ...correlation, durationMs });
   return { accepted: true, gap: active.gap };
 }
