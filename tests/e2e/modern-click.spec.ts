@@ -84,7 +84,7 @@ test('captures a Jakarta Faces action and reports exact runtime capabilities', a
     expect(click, `jsf.click missing; stages=${JSON.stringify(await captureDiagnostics(worker))}`).toBeDefined();
     const clickStages = (await captureDiagnostics(worker)).filter((record) => record.traceId === traceId && record.eventId === click!.eventId);
     expect(clickStages.map((record) => `${record.stage}.${record.outcome}`), `click transport stages=${JSON.stringify(clickStages)}`).toEqual(
-      expect.arrayContaining(['content.selection.accepted', 'content.port.accepted', 'background.port.accepted', 'background.receive.started', 'background.receive.accepted', 'background.record.accepted', 'host.ingest.accepted']));
+      expect.arrayContaining(['content.selection.accepted', 'content.port.accepted', 'background.receive.started', 'background.receive.accepted', 'background.record.accepted', 'host.ingest.accepted']));
     expect(events.some((event) => event.kind === 'method.start' && event.metadata?.['code.class'] === 'io.legacylens.fixture.OrderBean')).toBe(true);
     const methodEvents = events.filter((event) => event.kind === 'method.start');
     expect(methodEvents.every((event) => /^deployment@loader-[a-f0-9]+$/.test(event.metadata?.['code.deployment'] ?? ''))).toBe(true);

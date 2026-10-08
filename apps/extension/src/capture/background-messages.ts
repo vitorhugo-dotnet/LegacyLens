@@ -23,6 +23,29 @@ function originOf(url?: string): string | undefined {
 
 function error(message: string, code: string): CaptureEventReply { return { error: message, code }; }
 
+export async function handleCaptureHandshake(
+  message: unknown,
+  sender: CaptureMessageSender,
+  controller: CaptureEventController,
+): Promise<{ ready: true; sessionId: string } | { ready: false; error: string; code: string }> {
+  const reject = (message: string, code: string) => ({ ready: false as const, error: message, code });
+  const msg = message as Record<string, unknown> | null;
+  const sessionId = typeof msg?.sessionId === 'string' && /^[a-f0-9]{32}$/i.test(msg.sessionId) ? msg.sessionId : undefined;
+  const tabId = Number.isSafeInteger(sender.tab?.id) && (sender.tab?.id as number) >= 0 ? sender.tab!.id! : -1;
+  if (tabId < 0) return reject('Capture sender has no tab', 'SENDER_TAB');
+  const senderOrigin = sender.url !== undefined ? originOf(sender.url) : originOf(sender.tab?.url);
+  if (!senderOrigin) return reject('Capture sender URL is not HTTP(S)', 'SENDER_URL');
+  if (msg?.type !== 'capture.ready' || !sessionId) return reject('Capture handshake is malformed', 'EVENT_INVALID');
+  try { await controller.restore(); }
+  catch { return reject('Capture session unavailable', 'SESSION_UNAVAILABLE'); }
+  const active = controller.get(tabId);
+  if (!active || active.session.id !== sessionId || Date.parse(active.session.expiresAt) <= Date.now()) {
+    return reject('Capture session is missing, expired, or mismatched', 'SESSION_MISMATCH');
+  }
+  if (active.request.origin !== senderOrigin) return reject('Capture session origin does not match sender', 'ORIGIN_MISMATCH');
+  return { ready: true, sessionId };
+}
+
 export async function handleCaptureEvent(
   message: unknown,
   sender: CaptureMessageSender,

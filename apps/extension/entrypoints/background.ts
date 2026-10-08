@@ -3,6 +3,7 @@ import type { CaptureSession, ProjectListResult } from '@legacylens/contracts/sr
 import { NativeClient } from '../src/native/client.ts';
 import { CaptureController, type ActiveCapture } from '../src/capture/session.ts';
 import { handleCapturePort } from '../src/capture/background-port.ts';
+import { handleCaptureEvent, handleCaptureHandshake, type CaptureMessageSender } from '../src/capture/background-messages.ts';
 import { CAPTURE_PORT_NAME } from '../src/capture/port-protocol.ts';
 import { recordCaptureStage } from '../src/capture/diagnostics.ts';
 
@@ -250,6 +251,19 @@ export default defineBackground(() => {
     }
   });
   if (fixtureMode) (globalThis as FixtureDebugGlobal).__legacylensFixtureRuntimeConnectRegistered = true;
+  chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
+    const msg = message as { type?: unknown } | null;
+    if (msg?.type === 'capture.ready') {
+      void handleCaptureHandshake(message, sender as CaptureMessageSender, controller).then(respond, () => respond({ ready: false, error: 'Capture handshake failed', code: 'INTERNAL' }));
+      return true;
+    }
+    if (msg?.type === 'capture.event') {
+      void handleCaptureEvent(message, sender as CaptureMessageSender, controller, recordDiagnostic)
+        .then((reply) => { if (reply) respond(reply); }, () => respond({ error: 'Capture event failed', code: 'INTERNAL' }));
+      return true;
+    }
+    return false;
+  });
   if (fixtureMode) {
     globalThis.addEventListener('error', (event) => setFixturePhase(`uncaught:${event.message.slice(0, 120)}`));
     globalThis.addEventListener('unhandledrejection', () => setFixturePhase('unhandled-rejection'));
@@ -316,17 +330,4 @@ export default defineBackground(() => {
       .catch((error) => console.warn('LegacyLens could not stop capture after page navigation', error));
   });
 
-  chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
-    const msg = message as Record<string, unknown>;
-    const tabId = sender.tab?.id;
-    // Use the tab URL when a dynamically injected script has no HTTP sender URL.
-    const senderOrigin = originOf(sender.url) ?? originOf(sender.tab?.url);
-    if (!msg || typeof msg.type !== 'string') return;
-    if (tabId === undefined || !senderOrigin) return;
-    const run = async () => {
-      throw new Error('Unsupported capture message');
-    };
-    void run().then(respond, (error: unknown) => respond({ error: error instanceof Error ? error.message : 'Capture failed' }));
-    return true;
-  });
 });

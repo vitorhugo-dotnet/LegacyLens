@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the unacknowledged one-shot content→background event send with a bounded, correlated `chrome.runtime.Port` flow that recovers from service-worker disconnects without persisting duplicate events.
+**Goal:** Replace the unacknowledged one-shot content→background event send with a bounded, correlated transport that prefers `chrome.runtime.Port` and falls back to acknowledged `runtime.sendMessage` when the Port receiver does not complete its handshake.
 
-**Architecture:** The content script owns one Port for an active capture and holds unacknowledged events in a FIFO capped at 100. The background validates the Port sender and active session, passes events through the existing capture controller, and sends ACK only after `trace.ingest` succeeds. On disconnect, content reconnects up to three times with delays of 250, 1,000, and 2,000 ms, replaying the same event IDs; core deduplication makes replay idempotent.
+**Architecture:** The content script owns one Port attempt for an active capture and holds unacknowledged events in a FIFO capped at 100. It waits 5 seconds for the session handshake. If no `ready` arrives, it performs the same sender/session handshake through `runtime.sendMessage`; both paths pass events through the same background validation and `CaptureController`, and receive ACK only after `trace.ingest` succeeds. Retryable delivery failures use delays of 250, 1,000, and 2,000 ms, replaying the same event IDs; core deduplication makes replay idempotent. This fallback is based on Windows CI evidence: `onConnect` was registered but never called for the content Port.
 
 **Tech Stack:** TypeScript, Chrome MV3 `runtime.Port`, WXT, Vitest, Playwright Windows E2E, existing `CaptureController` and native core.
 
@@ -21,6 +21,8 @@
 - If the queue is full, reject the new event and persist an `extension.gap` marker when the Port is available; never silently evict an older event.
 - Stop reconnecting on `capture.end`, tab close, expired session, or sender-origin mismatch. Page navigation must not let an old session reconnect from a different origin.
 - Keep fixture diagnostics and the fixture capture driver unavailable in production builds.
+- Register Port and message transport listeners before optional context-menu initialization.
+- Never accept a message fallback without validating sender tab, HTTP(S) origin, active session, and expiry; never ACK before host persistence.
 - Do not change the native host protocol or core deduplication key.
 
 ## Review Focus
@@ -91,6 +93,7 @@ Expected: PASS; malformed envelopes return `undefined` and valid envelopes retai
 - The accepted event message is adapted to the existing `handleCaptureEvent` boundary; ACK follows only after its `{ accepted: true }` reply.
 - `CaptureController.record(...)` returns `{ gap: boolean; duplicate: boolean }`; `duplicate` comes from `trace.ingest`, and a duplicate result remains an accepted ACK.
 - `chrome.runtime.onConnect` accepts only the Port name from Task 1 and HTTP(S) content-script senders with `sender.tab.id`.
+- Register `runtime.onMessage` as an early fallback for `capture.ready` and `capture.event`; reuse the same sender/session/origin validation and event recorder as the Port path.
 
 - [ ] **Step 1: Extend controller tests for host identity.** Change `CaptureController.record(...)` to return `{ gap: boolean; duplicate: boolean }`, preserving per-tab serialization and existing timeout/rejection behavior. Add tests for accepted and duplicate `trace.ingest` results.
 - [ ] **Step 2: Write background Port tests.** Cover valid hello/ready, event ACK after record resolves, retryable host timeout NACK, permanent validation NACK, missing tab, non-HTTP sender, origin mismatch, expired/missing session, malformed messages, duplicate event ACK, stop cleanup, and disconnect cleanup. Assert rejected cases never call `controller.record`.
@@ -101,7 +104,7 @@ Run: `npm run test --workspace apps/extension -- src/capture/background-port.tes
 Expected: FAIL because `handleCapturePort` is not implemented.
 
 - [ ] **Step 4: Implement sender binding, hello/session handshake, serial message handling, ACK/NACK mapping, and cleanup.** NACK codes are fixed; only disconnect and typed native timeout are retryable. For `overflow`, record `extension.gap` before ACK.
-- [ ] **Step 5: Register `onConnect` in the background and reject unknown Port names.** Do not keep the old `capture.event` runtime listener as an alternate event path.
+- [ ] **Step 5: Register `onConnect` and the acknowledged message fallback at the beginning of background startup.** Reject unknown Port names. Only enable message fallback after the Port handshake times out; both transports must call the same validation/recording functions.
 - [ ] **Step 6: Drain the Port before user stop.** Make `capture.end` wait for content's `CapturePortClient.stop()` to drain/close; then call `CaptureController.stop`. On tab removal or top-level navigation, mark the trace incomplete and stop it without opening the investigation page.
 - [ ] **Step 7: Run focused controller and background Port tests plus typecheck.**
 
@@ -123,7 +126,7 @@ Expected: PASS; only the active tab/origin/session can deliver events, and ACK w
 
 **Interfaces:**
 
-- `CapturePortClient` accepts injected `connect(name)`, timers, and safe diagnostics for unit tests; production injects `chrome.runtime.connect`.
+- `CapturePortClient` accepts injected `connect(name)`, message fallback, timers, and safe diagnostics for unit tests; production injects Chrome runtime APIs.
 - `start(traceId): Promise<void>` opens a Port and resolves only after `ready` for that trace.
 - `send(event): Promise<{ accepted: true; gap: boolean; duplicate: boolean }>` enqueues FIFO, returns on matching ACK, and rejects on permanent NACK, stop, queue overflow, or exhausted reconnects.
 - `stop(code: string): Promise<void>` drains acknowledged work for at most 35 seconds, then disconnects, rejects any remaining requests, clears timers, and disables reconnection.
@@ -137,7 +140,7 @@ Expected: FAIL because `CapturePortClient` is not implemented.
 
 - [ ] **Step 3: Implement the FIFO and handshake.** Keep one in-flight event; remove it only on matching ACK or permanent failure. Preserve the original event ID and payload across retries.
 - [ ] **Step 4: Implement bounded reconnect behavior.** Retry disconnect/timeout failures at 250 ms, 1,000 ms, and 2,000 ms, up to three attempts; keep pending events during retry and reject all when stopped or exhausted.
-- [ ] **Step 5: Replace the current message-helper wiring in `content.ts`.** Start the Port after validating `capture.begin`, use it for every capture event, and close it in `resetCapture`/`capture.end`. Keep diagnostics local and privacy-safe.
+- [ ] **Step 5: Replace the current message-helper wiring in `content.ts`.** Start the Port after validating `capture.begin`; after a 5-second handshake timeout, negotiate and send through the acknowledged message fallback. Preserve the same FIFO, event IDs, retry bounds, and cleanup in both modes.
 - [ ] **Step 6: Run client, controller, and extension tests plus typecheck.**
 
 Run: `npm run test --workspace apps/extension -- src/capture/port-client.test.ts`
@@ -186,6 +189,8 @@ Expected: all commands pass and all five E2E tests are discovered.
 - [ ] **Step 6: Commit the reliability and E2E assertions, push `main`, and inspect the Windows CI artifacts.** Required checks and both click-flow fixtures must pass; a repeated event ID must appear once in the expected trace.
 
 ## Self-review
+
+- **CI-driven transport adaptation:** runs `37823952379`, `37825808433`, and `37826551410` showed the Port handshake times out even when the background listener is registered. The fallback keeps the approved validation/ACK/idempotency design and changes only the content→background carrier after failed negotiation.
 
 - **Spec coverage:** Port handshake, active-session/origin checks, ACK after native acceptance, idempotent retry, bounded queue/backoff, terminal NACKs, fixture-only diagnostics, and E2E identity correlation each map to Tasks 1–4.
 - **Step clarity:** Every task names its module, API, focused test, and expected outcome. No task implements retry without the core deduplication check.

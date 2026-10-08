@@ -69,7 +69,7 @@ export default defineContentScript({
           : stage.includes('timeout') ? 'timeout' : stage.includes('nack') || stage.includes('overflow') || stage.includes('invalid') || stage.includes('exhausted') ? 'rejected' : 'started';
         recordContentStage({ stage: 'content.port', outcome, traceId: nextSession.id, tabId,
           ...(eventId ? { eventId } : {}), ...(code ? { code } : {}) });
-      });
+      }, undefined, (message) => chrome.runtime.sendMessage(message));
       try { await capturePort.start(nextSession.id); }
       catch (error) { resetCapture(); throw error; }
       nonce = [...crypto.getRandomValues(new Uint8Array(16))].map((n) => n.toString(16).padStart(2, '0')).join('');

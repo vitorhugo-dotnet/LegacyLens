@@ -16,6 +16,7 @@ interface CapturePortTimers {
   setTimeout(handler: () => void, timeout: number): ReturnType<typeof setTimeout>;
   clearTimeout(timer: ReturnType<typeof setTimeout>): void;
 }
+type CaptureMessageFallback = (message: Record<string, unknown>) => Promise<unknown>;
 function randomEventId(): string {
   let id = '';
   do { id = [...crypto.getRandomValues(new Uint8Array(8))].map((n) => n.toString(16).padStart(2, '0')).join(''); } while (/^0+$/.test(id));
@@ -28,6 +29,7 @@ export class CapturePortClient {
   private queue: Pending[] = [];
   private inFlight: Pending | undefined;
   private ready = false;
+  private mode: 'port' | 'message' | undefined;
   private connecting = false;
   private stopped = false;
   private closed = false;
@@ -44,7 +46,7 @@ export class CapturePortClient {
 
   constructor(private readonly connect: (name: string) => CapturePortLike,
     private readonly diagnostics: (stage: string, eventId?: string, code?: string) => void = () => {},
-    timers?: CapturePortTimers) {
+    timers?: CapturePortTimers, private readonly messageFallback?: CaptureMessageFallback) {
     this.timers = timers ?? {
       setTimeout: (handler: () => void, timeout: number) => globalThis.setTimeout(handler, timeout),
       clearTimeout: (timer) => globalThis.clearTimeout(timer),
@@ -110,7 +112,10 @@ export class CapturePortClient {
       if (!this.traceId) throw new Error('Capture trace is missing');
       this.safePost({ type: 'hello', version: CAPTURE_PORT_VERSION, traceId: this.traceId });
       this.diagnostics('port.connect');
-      this.ackTimer = this.timers.setTimeout(() => { this.diagnostics('port.handshake-timeout', undefined, 'TIMEOUT'); this.reconnect(); }, CAPTURE_PORT_HANDSHAKE_TIMEOUT_MS);
+      this.ackTimer = this.timers.setTimeout(() => {
+        this.diagnostics('port.handshake-timeout', undefined, 'TIMEOUT');
+        void this.fallbackToMessages();
+      }, CAPTURE_PORT_HANDSHAKE_TIMEOUT_MS);
     } catch {
       this.connecting = false;
       this.port = undefined;
@@ -125,6 +130,7 @@ export class CapturePortClient {
     if (message.type === 'ready') {
       this.clearAckTimer();
       this.ready = true;
+      this.mode = 'port';
       this.connecting = false;
       this.startResolve?.();
       this.startResolve = undefined;
@@ -191,6 +197,7 @@ export class CapturePortClient {
     if (!this.ready || this.inFlight || !this.queue.length || !this.traceId) return;
     const current = this.queue[0]!;
     this.inFlight = current;
+    if (this.mode === 'message') { void this.sendMessageEvent(current); return; }
     const message: CapturePortClientMessage = { type: 'event', version: CAPTURE_PORT_VERSION, traceId: this.traceId,
       eventId: current.event.eventId, kind: current.event.kind, ...(current.event.parentEventId ? { parentEventId: current.event.parentEventId } : {}),
       metadata: current.event.metadata };
@@ -202,6 +209,96 @@ export class CapturePortClient {
     }, 35_000);
   }
 
+  private async fallbackToMessages(): Promise<void> {
+    if (!this.messageFallback || !this.traceId || this.closed) { this.reconnect(); return; }
+    const traceId = this.traceId;
+    try {
+      const response = await this.messageFallback({ type: 'capture.ready', sessionId: traceId }) as { ready?: unknown; sessionId?: unknown } | undefined;
+      if (response?.ready !== true || response.sessionId !== traceId) { this.reconnect(); return; }
+      this.disconnect();
+      this.mode = 'message';
+      this.ready = true;
+      this.connecting = false;
+      this.retries = 0;
+      this.startResolve?.();
+      this.startResolve = undefined;
+      this.startReject = undefined;
+      this.diagnostics('message.ready');
+      this.pump();
+    } catch {
+      this.diagnostics('message.handshake-failed', undefined, 'MESSAGE_FAILED');
+      this.reconnect();
+    }
+  }
+
+  private async sendMessageEvent(current: Pending): Promise<void> {
+    if (!this.messageFallback || !this.traceId || current.settled) return;
+    this.diagnostics('message.send', current.event.eventId);
+    const timeout = this.timers.setTimeout(() => {
+      if (this.inFlight === current && !current.settled) this.retryMessageEvent(current, 'TIMEOUT');
+    }, 35_000);
+    try {
+      const response = await this.messageFallback({ type: 'capture.event', sessionId: this.traceId,
+        eventId: current.event.eventId, kind: current.event.kind,
+        ...(current.event.parentEventId ? { parentEventId: current.event.parentEventId } : {}), metadata: current.event.metadata }) as
+        { accepted?: unknown; gap?: unknown; duplicate?: unknown; error?: unknown; code?: unknown; retryable?: unknown } | undefined;
+      this.timers.clearTimeout(timeout);
+      if (current.settled || this.inFlight !== current) return;
+      if (response?.accepted === true && typeof response.gap === 'boolean') {
+        this.finishMessageEvent(current, { accepted: true, gap: response.gap, duplicate: response.duplicate === true });
+      } else if (response?.retryable === true || response === undefined) {
+        this.retryMessageEvent(current, typeof response?.code === 'string' ? response.code : 'NO_ACK');
+      } else {
+        this.hasGap = true;
+        this.rejectMessageEvent(current, new Error(typeof response?.code === 'string' ? response.code : 'INVALID_ACK'));
+      }
+    } catch {
+      this.timers.clearTimeout(timeout);
+      if (!current.settled && this.inFlight === current) this.retryMessageEvent(current, 'MESSAGE_FAILED');
+    }
+  }
+
+  private finishMessageEvent(current: Pending, ack: CapturePortAcknowledgement): void {
+    if (this.retryTimer) this.timers.clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
+    this.inFlight = undefined;
+    this.queue.shift();
+    current.settled = true;
+    current.resolve(ack);
+    this.retries = 0;
+    this.notifyDrain();
+    this.diagnostics('message.ack', current.event.eventId);
+    this.pump();
+  }
+
+  private rejectMessageEvent(current: Pending, error: Error): void {
+    if (this.retryTimer) this.timers.clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
+    this.inFlight = undefined;
+    this.queue.shift();
+    current.settled = true;
+    current.reject(error);
+    this.notifyDrain();
+    this.diagnostics('message.nack', current.event.eventId, error.message);
+    this.pump();
+  }
+
+  private retryMessageEvent(current: Pending, code: string): void {
+    const delay = CAPTURE_PORT_RECONNECT_DELAYS_MS[this.retries];
+    if (delay === undefined) {
+      this.hasGap = true;
+      this.diagnostics('message.reconnect-exhausted', current.event.eventId, code);
+      this.failAll(new Error('Capture message retry limit exhausted'));
+      return;
+    }
+    this.retries++;
+    this.diagnostics('message.retry', current.event.eventId, code);
+    this.retryTimer = this.timers.setTimeout(() => {
+      this.retryTimer = undefined;
+      if (this.inFlight === current && !current.settled) void this.sendMessageEvent(current);
+    }, delay);
+  }
+
   private safePost(message: CapturePortClientMessage): boolean {
     try { this.port?.postMessage(message); return Boolean(this.port); }
     catch { this.disconnect(); this.scheduleReconnect(); return false; }
@@ -210,6 +307,7 @@ export class CapturePortClient {
   private disconnect(): void {
     this.ready = false;
     this.connecting = false;
+    this.mode = undefined;
     this.clearAckTimer();
     this.inFlight = undefined;
     const old = this.port;

@@ -128,4 +128,46 @@ describe('CapturePortClient', () => {
     await client.stop();
     vi.useRealTimers();
   });
+
+  it('falls back to acknowledged runtime messages when the Port handshake is unreachable', async () => {
+    vi.useFakeTimers();
+    const conn = fakePort();
+    const fallback = vi.fn(async (message: Record<string, unknown>) => message.type === 'capture.ready'
+      ? { ready: true, sessionId: traceId }
+      : { accepted: true, gap: false, duplicate: false });
+    const client = new CapturePortClient(() => conn.port, () => {}, undefined, fallback);
+    const started = client.start(traceId);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(started).resolves.toBeUndefined();
+    await expect(client.send(event('8'.repeat(16)))).resolves.toEqual({ accepted: true, gap: false, duplicate: false });
+    expect(fallback).toHaveBeenNthCalledWith(1, { type: 'capture.ready', sessionId: traceId });
+    expect(fallback).toHaveBeenNthCalledWith(2, {
+      type: 'capture.event', sessionId: traceId, eventId: '8'.repeat(16), kind: 'jsf.click', metadata: { source: 'button' },
+    });
+    await client.stop();
+    vi.useRealTimers();
+  });
+
+  it('retries fallback messages with the same event identity after a retryable rejection', async () => {
+    vi.useFakeTimers();
+    const conn = fakePort();
+    const eventMessages: Record<string, unknown>[] = [];
+    const fallback = vi.fn(async (message: Record<string, unknown>) => {
+      if (message.type === 'capture.ready') return { ready: true, sessionId: traceId };
+      eventMessages.push(message);
+      return eventMessages.length === 1 ? { error: 'temporary', code: 'HOST_TIMEOUT', retryable: true }
+        : { accepted: true, gap: false, duplicate: true };
+    });
+    const client = new CapturePortClient(() => conn.port, () => {}, undefined, fallback);
+    const started = client.start(traceId);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await started;
+    const pending = client.send(event('9'.repeat(16)));
+    await vi.advanceTimersByTimeAsync(250);
+    await expect(pending).resolves.toEqual({ accepted: true, gap: false, duplicate: true });
+    expect(eventMessages).toHaveLength(2);
+    expect(eventMessages[0]).toEqual(eventMessages[1]);
+    await client.stop();
+    vi.useRealTimers();
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleCaptureEvent } from './background-messages.ts';
+import { handleCaptureEvent, handleCaptureHandshake } from './background-messages.ts';
 
 const traceId = 'a'.repeat(32);
 const eventId = 'b'.repeat(16);
@@ -12,6 +12,25 @@ function setup() {
 }
 const message = { type: 'capture.event', sessionId: traceId, kind: 'jsf.click', eventId, metadata: { source: 'button' } };
 const sender = { url: 'http://localhost:8180/page', tab: { id: 4, url: 'http://localhost:8180/page' } };
+
+describe('background capture message handshake', () => {
+  it('confirms only the active, unexpired session for the sender tab and origin', async () => {
+    const deps = setup();
+    await expect(handleCaptureHandshake({ type: 'capture.ready', sessionId: traceId }, sender, deps.controller as never))
+      .resolves.toEqual({ ready: true, sessionId: traceId });
+    expect(deps.controller.restore).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [{ ...sender, tab: {} }, 'SENDER_TAB'],
+    [{ ...sender, url: 'chrome://settings' }, 'SENDER_URL'],
+    [{ ...sender, url: 'http://other.test/page' }, 'ORIGIN_MISMATCH'],
+  ])('rejects an invalid sender before confirming readiness', async (invalidSender, code) => {
+    const deps = setup();
+    await expect(handleCaptureHandshake({ type: 'capture.ready', sessionId: traceId }, invalidSender, deps.controller as never))
+      .resolves.toMatchObject({ ready: false, code });
+  });
+});
 
 describe('background capture event boundary', () => {
   it('acknowledges a valid event only after record succeeds', async () => {
