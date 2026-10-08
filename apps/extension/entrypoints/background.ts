@@ -2,6 +2,8 @@ import { defineBackground } from 'wxt/utils/define-background';
 import type { CaptureSession, ProjectListResult } from '@legacylens/contracts/src/protocol.ts';
 import { NativeClient } from '../src/native/client.ts';
 import { CaptureController, type ActiveCapture } from '../src/capture/session.ts';
+import { handleCaptureEvent } from '../src/capture/background-messages.ts';
+import { recordCaptureStage } from '../src/capture/diagnostics.ts';
 
 const client = new NativeClient();
 const stateKey = 'legacylens.activeCaptures.v1';
@@ -16,9 +18,20 @@ const fixtureMode = (() => {
   try { return chrome.runtime.getManifest().host_permissions?.includes('http://127.0.0.1/*') === true; }
   catch { return false; }
 })();
-type FixtureDebugGlobal = typeof globalThis & { __legacylensFixturePhase?: string };
+type FixtureDebugGlobal = typeof globalThis & { __legacylensFixturePhase?: string; __legacyLensCaptureDiagnostics?: ReturnType<typeof fixtureDiagnosticRecords> };
+function fixtureDiagnosticRecords() { return [] as Array<import('../src/capture/diagnostics.ts').CaptureStageRecord>; }
 function setFixturePhase(phase: string): void {
   (globalThis as FixtureDebugGlobal).__legacylensFixturePhase = phase;
+}
+function recordDiagnostic(record: import('../src/capture/diagnostics.ts').CaptureStageRecord): void {
+  recordCaptureStage(record, chrome.runtime.getManifest() as { host_permissions?: string[] }, (safeRecord) => {
+    console.info('LegacyLens capture stage', JSON.stringify(safeRecord));
+    if (!fixtureMode) return;
+    const target = globalThis as FixtureDebugGlobal;
+    const ring = target.__legacyLensCaptureDiagnostics ?? (target.__legacyLensCaptureDiagnostics = fixtureDiagnosticRecords());
+    ring.push(safeRecord);
+    if (ring.length > 100) ring.splice(0, ring.length - 100);
+  });
 }
 setFixturePhase(fixtureMode ? 'manifest-fixture-enabled' : 'manifest-fixture-disabled');
 // @types/chrome currently omits the documented dynamic-menu lifecycle API.
@@ -29,7 +42,7 @@ const dynamicContextMenus = chrome.contextMenus as typeof chrome.contextMenus & 
 const controller = new CaptureController(client, {
   async load() { return ((await chrome.storage.session.get(stateKey))[stateKey] ?? []) as ActiveCapture[]; },
   async save(entries) { await chrome.storage.session.set({ [stateKey]: entries }); },
-});
+}, recordDiagnostic);
 
 function originOf(url?: string): string | undefined {
   if (!url) return undefined;
@@ -148,7 +161,7 @@ async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?
     if (fixtureMode) console.info('LegacyLens fixture capture: capture.start completed');
     if (options.notifyContent !== false) {
       try {
-        const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.begin', projectId, session, origin }) as { ok?: boolean; error?: string };
+        const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.begin', projectId, session, origin, tabId }) as { ok?: boolean; error?: string };
         if (reply?.error || !reply?.ok) throw new Error(reply?.error ?? 'Content script did not acknowledge capture start');
       } catch (error) {
         await controller.stop(tabId);
@@ -207,7 +220,7 @@ export default defineBackground(() => {
         if (!session) throw new Error(`Fixture capture did not start (background phase: ${(globalThis as FixtureDebugGlobal).__legacylensFixturePhase ?? 'unknown'})`);
         const origin = originOf(tab.url);
         if (!origin) throw new Error('Fixture tab does not have an HTTP origin');
-        const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.begin', projectId, session, origin }) as { ok?: boolean; error?: string };
+        const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.begin', projectId, session, origin, tabId }) as { ok?: boolean; error?: string };
         if (reply?.error || !reply?.ok) {
           await controller.stop(tabId);
           throw new Error(reply?.error ?? 'Content script did not acknowledge fixture capture');
@@ -250,30 +263,15 @@ export default defineBackground(() => {
     const tabId = sender.tab?.id;
     // Use the tab URL when a dynamically injected script has no HTTP sender URL.
     const senderOrigin = originOf(sender.url) ?? originOf(sender.tab?.url);
-    if (tabId === undefined || !senderOrigin || !msg || typeof msg.type !== 'string') return;
+    if (!msg || typeof msg.type !== 'string') return;
+    if (msg.type === 'capture.event') {
+      void handleCaptureEvent(message, sender, controller,
+        recordDiagnostic)
+        .then((reply) => { if (reply) respond(reply); }, () => respond({ error: 'Capture event failed', code: 'INTERNAL' }));
+      return true;
+    }
+    if (tabId === undefined || !senderOrigin) return;
     const run = async () => {
-      if (msg.type === 'capture.event' && typeof msg.kind === 'string' && typeof msg.sessionId === 'string') {
-        await controller.restore();
-        const active = controller.get(tabId);
-        if (!active || active.session.id !== msg.sessionId || active.request.origin !== senderOrigin) throw new Error('Unmatched capture event');
-        if (!['jsf.click', 'primefaces.ajax', 'primefaces.propagation_attempt', 'browser.network', 'browser.propagation_attempt', 'extension.diagnostic'].includes(msg.kind)) throw new Error('Unsupported event kind');
-        const metadata = msg.metadata;
-        if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('Invalid event metadata');
-        const safe: Record<string, string> = {};
-        for (const key of ['source', 'code', 'spanId', 'transport', 'frameChain', 'stackGap']) {
-          const value = (metadata as Record<string, unknown>)[key];
-          if (typeof value === 'string' && value.length <= 256) safe[key] = value;
-        }
-        const eventId = typeof msg.eventId === 'string' ? msg.eventId : undefined;
-        const parentEventId = typeof msg.parentEventId === 'string' ? msg.parentEventId : undefined;
-        if (msg.kind === 'jsf.click' && !eventId) throw new Error('Missing click identity');
-        if (msg.kind !== 'jsf.click' && msg.kind !== 'extension.diagnostic' && !parentEventId) throw new Error('Missing interaction parent');
-        if (safe.spanId && (!/^[a-f0-9]{16}$/i.test(safe.spanId) || /^0+$/.test(safe.spanId))) throw new Error('Invalid span identity');
-        if (msg.kind === 'browser.network' && (!safe.spanId || !['fetch', 'xhr'].includes(safe.transport ?? ''))) throw new Error('Invalid network effect');
-        if (msg.kind === 'browser.propagation_attempt' && safe.spanId) throw new Error('Unverified span identity');
-        await controller.record(tabId, msg.kind, safe, { ...(eventId ? { eventId } : {}), ...(parentEventId ? { parentEventId } : {}) });
-        return { accepted: true, gap: active.gap };
-      }
       throw new Error('Unsupported capture message');
     };
     void run().then(respond, (error: unknown) => respond({ error: error instanceof Error ? error.message : 'Capture failed' }));
