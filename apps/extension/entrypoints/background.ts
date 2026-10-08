@@ -25,8 +25,6 @@ type FixtureDebugGlobal = typeof globalThis & {
   __legacylensFixturePhase?: string;
   __legacylensFixtureRuntimeConnectRegistered?: boolean;
   __legacylensFixtureRuntimeConnectCount?: number;
-  __legacylensFixtureRuntimeMessageRegistered?: boolean;
-  __legacylensFixtureRuntimeMessageCount?: number;
   __legacylensFixtureStorageRequestCount?: number;
   __legacylensFixtureStorageChangeCount?: number;
   __legacyLensCaptureDiagnostics?: ReturnType<typeof fixtureDiagnosticRecords>;
@@ -350,15 +348,14 @@ export default defineBackground(() => {
     }
   });
   if (fixtureMode) (globalThis as FixtureDebugGlobal).__legacylensFixtureRuntimeConnectRegistered = true;
-  if (fixtureMode) (globalThis as FixtureDebugGlobal).__legacylensFixtureRuntimeMessageRegistered = false;
   if (fixtureMode) {
     globalThis.addEventListener('error', (event) => setFixturePhase(`uncaught:${event.message.slice(0, 120)}`));
     globalThis.addEventListener('unhandledrejection', () => setFixturePhase('unhandled-rejection'));
   }
   if (fixtureMode) {
     (globalThis as FixtureDebugGlobal & {
-      __legacyLensFixtureCapture?: (request: { action: 'start' | 'stop'; tabId: number; projectId?: string }) => Promise<{ ok: true; session?: CaptureSession }>;
-    }).__legacyLensFixtureCapture = async ({ action, tabId, projectId }) => {
+      __legacyLensFixtureCapture?: (request: { action: 'start' | 'stop'; tabId: number; projectId?: string; openInvestigation?: boolean }) => Promise<{ ok: true; session?: CaptureSession }>;
+    }).__legacyLensFixtureCapture = async ({ action, tabId, projectId, openInvestigation }) => {
       const tab = await chrome.tabs.get(tabId);
       if (action === 'start') {
         if (!projectId) throw new Error('Fixture capture needs a project ID');
@@ -375,17 +372,15 @@ export default defineBackground(() => {
           const phase = debug.__legacylensFixturePhase ?? 'unknown';
           const listener = debug.__legacylensFixtureRuntimeConnectRegistered === true;
           const connections = debug.__legacylensFixtureRuntimeConnectCount ?? 0;
-          const messageListener = debug.__legacylensFixtureRuntimeMessageRegistered === true;
-          const messages = debug.__legacylensFixtureRuntimeMessageCount ?? 0;
           const storageRequests = debug.__legacylensFixtureStorageRequestCount ?? 0;
           const storageChanges = debug.__legacylensFixtureStorageChangeCount ?? 0;
           const stored = await chrome.storage.local.get(null);
           const pendingStorageKeys = Object.keys(stored).filter((key) => key.startsWith(CAPTURE_TRANSPORT_STORAGE_PREFIX)).length;
-          throw new Error(`${reply?.error ?? 'Content script did not acknowledge fixture capture'} (phase: ${phase}; onConnect registered: ${listener}; calls: ${connections}; onMessage registered: ${messageListener}; calls: ${messages}; storage changes: ${storageChanges}; valid storage requests: ${storageRequests}; pending outbox keys: ${pendingStorageKeys})`);
+          throw new Error(`${reply?.error ?? 'Content script did not acknowledge fixture capture'} (phase: ${phase}; onConnect registered: ${listener}; calls: ${connections}; storage changes: ${storageChanges}; valid storage requests: ${storageRequests}; pending outbox keys: ${pendingStorageKeys})`);
         }
         return { ok: true, session };
       }
-      await stopCapture(tab, { openInvestigation: false });
+      await stopCapture(tab, { openInvestigation: openInvestigation === true });
       return { ok: true };
     };
   }

@@ -13,18 +13,19 @@ export async function captureDiagnostics(worker: Worker): Promise<CaptureStageRe
   });
 }
 
-async function sendFixtureCommand(worker: Worker, page: Page, message: { type: string; projectId?: string }): Promise<CaptureReply> {
+async function sendFixtureCommand(worker: Worker, page: Page, message: { type: string; projectId?: string; openInvestigation?: boolean }): Promise<CaptureReply> {
   return await worker.evaluate(async ({ url, command }) => {
     const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
     if (tab?.id === undefined) throw new Error('fixture tab is unavailable');
     const driver = (globalThis as typeof globalThis & {
-      __legacyLensFixtureCapture?: (request: { action: 'start' | 'stop'; tabId: number; projectId?: string }) => Promise<CaptureReply>;
+      __legacyLensFixtureCapture?: (request: { action: 'start' | 'stop'; tabId: number; projectId?: string; openInvestigation?: boolean }) => Promise<CaptureReply>;
     }).__legacyLensFixtureCapture;
     if (!driver) throw new Error('fixture capture driver is not available in the extension service worker');
     return await driver({
       action: command.type === 'fixture.capture.start' ? 'start' : 'stop',
       tabId: tab.id,
       ...(command.projectId ? { projectId: command.projectId } : {}),
+      ...(command.openInvestigation ? { openInvestigation: command.openInvestigation } : {}),
     });
   }, { url: page.url(), command: message });
 }
@@ -36,7 +37,7 @@ export async function startFixtureCapture(worker: Worker, page: Page, projectId:
   }
 }
 
-export async function stopFixtureCapture(worker: Worker, page: Page): Promise<void> {
-  const reply = await sendFixtureCommand(worker, page, { type: 'fixture.capture.stop' });
+export async function stopFixtureCapture(worker: Worker, page: Page, options: { openInvestigation?: boolean } = {}): Promise<void> {
+  const reply = await sendFixtureCommand(worker, page, { type: 'fixture.capture.stop', ...options });
   if (!reply?.ok) throw new Error(reply?.error ?? 'Fixture capture did not stop');
 }

@@ -139,7 +139,7 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
       };
     },{timeout:30_000}).toMatchObject({insert:true,update:true});
     const investigationPage = context.waitForEvent('page',{timeout:15_000});
-    await stopFixtureCapture(worker,page);
+    await stopFixtureCapture(worker,page,{openInvestigation:true});
     await expect.poll(activeTrace,{timeout:15_000,message:'second capture did not stop'}).toBeUndefined();
     const result = await investigation(trace);
     expect(result.agentStatus.state).toBe('online');
