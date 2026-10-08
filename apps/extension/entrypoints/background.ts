@@ -128,7 +128,7 @@ async function startCapture(tab?: chrome.tabs.Tab): Promise<void> {
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/page.js'], world: 'MAIN' });
     const session = await controller.start({ projectId, tabId, origin });
     try {
-      const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.begin', projectId, session }) as { ok?: boolean; error?: string };
+      const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.begin', projectId, session, origin }) as { ok?: boolean; error?: string };
       if (reply?.error || !reply?.ok) throw new Error(reply?.error ?? 'Content script did not acknowledge capture start');
     } catch (error) {
       await controller.stop(tabId);

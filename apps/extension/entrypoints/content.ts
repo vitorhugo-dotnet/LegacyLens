@@ -28,9 +28,12 @@ export default defineContentScript({
       if (nonce) window.dispatchEvent(new CustomEvent('legacylens:stop', { detail: { nonce } }));
       session = undefined; selectedSource = ''; clickEventId = ''; nonce = '';
     };
-    const beginCapture = (projectId: string, nextSession: CaptureSession) => {
+    const beginCapture = (projectId: string, nextSession: CaptureSession, expectedOrigin: string) => {
+      const expiresAt = Date.parse(nextSession.expiresAt);
       if (nextSession.projectId !== projectId || !/^[a-f0-9]{32}$/i.test(nextSession.id)
-        || Date.parse(nextSession.expiresAt) <= Date.now()) throw new Error('Invalid or expired capture session');
+        || !Number.isFinite(expiresAt) || expiresAt <= Date.now() || expectedOrigin !== location.origin) {
+        throw new Error('Invalid, expired, or mismatched capture session');
+      }
       if (session?.id === nextSession.id) return;
       resetCapture();
       session = nextSession;
@@ -46,10 +49,11 @@ export default defineContentScript({
       });
     };
     chrome.runtime.onMessage.addListener((message: unknown, _sender, respond) => {
-      const msg = message as { type?: unknown; projectId?: unknown; session?: unknown; traceId?: unknown };
+      const msg = message as { type?: unknown; projectId?: unknown; session?: unknown; origin?: unknown; traceId?: unknown };
       try {
-        if (msg?.type === 'capture.begin' && typeof msg.projectId === 'string' && msg.session && typeof msg.session === 'object') {
-          beginCapture(msg.projectId, msg.session as CaptureSession);
+        if (msg?.type === 'capture.begin' && typeof msg.projectId === 'string' && typeof msg.origin === 'string'
+          && msg.session && typeof msg.session === 'object') {
+          beginCapture(msg.projectId, msg.session as CaptureSession, msg.origin);
           respond({ ok: true });
         } else if (msg?.type === 'capture.end' && typeof msg.traceId === 'string') {
           if (!session || session.id === msg.traceId) resetCapture();
