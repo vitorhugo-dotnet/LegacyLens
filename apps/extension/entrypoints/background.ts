@@ -1,5 +1,5 @@
 import { defineBackground } from 'wxt/utils/define-background';
-import type { ProjectListResult } from '@legacylens/contracts/src/protocol.ts';
+import type { CaptureSession, ProjectListResult } from '@legacylens/contracts/src/protocol.ts';
 import { NativeClient } from '../src/native/client.ts';
 import { CaptureController, type ActiveCapture } from '../src/capture/session.ts';
 
@@ -12,6 +12,7 @@ const startMenuId = 'legacylens.capture.start';
 const stopMenuId = 'legacylens.capture.stop';
 const manageMenuId = 'legacylens.projects.manage';
 const pagePatterns = ['http://*/*', 'https://*/*'];
+const fixtureMode = chrome.runtime.getManifest().host_permissions?.includes('http://127.0.0.1/*') === true;
 // @types/chrome currently omits the documented dynamic-menu lifecycle API.
 const dynamicContextMenus = chrome.contextMenus as typeof chrome.contextMenus & {
   onShown: { addListener(listener: (info: unknown, tab?: chrome.tabs.Tab) => void): void };
@@ -109,17 +110,19 @@ function queueMenuRender(tab?: chrome.tabs.Tab): Promise<void> {
   return next;
 }
 
-async function startCapture(tab?: chrome.tabs.Tab): Promise<void> {
+async function startCapture(tab?: chrome.tabs.Tab, options: { requestPermission?: boolean; projectId?: string } = {}): Promise<CaptureSession | undefined> {
   const tabId = tab?.id;
   const origin = originOf(tab?.url);
   if (tabId === undefined || !origin) return;
 
-  // Invoke permissions.request synchronously in this menu click handler so the browser keeps the user gesture.
   try {
-    const parsed = new URL(origin);
-    const permissionRequest = chrome.permissions.request({ origins: [`${parsed.protocol}//${parsed.hostname}/*`] });
-    if (!await permissionRequest) return;
-    const projectId = await selectedProjectFor(tabId);
+    if (options.requestPermission !== false) {
+      // Invoke permissions.request synchronously in this menu click handler so the browser keeps the user gesture.
+      const parsed = new URL(origin);
+      const permissionRequest = chrome.permissions.request({ origins: [`${parsed.protocol}//${parsed.hostname}/*`] });
+      if (!await permissionRequest) return;
+    }
+    const projectId = options.projectId ?? await selectedProjectFor(tabId);
     if (!projectId) throw new Error('Selecione um projeto LegacyLens no submenu.');
     const projects = await client.request<ProjectListResult>('project.list', { offset: 0, limit: 200 });
     if (!projects.items.some((project) => project.id === projectId)) throw new Error('O projeto selecionado não está mais registrado.');
@@ -135,9 +138,11 @@ async function startCapture(tab?: chrome.tabs.Tab): Promise<void> {
       throw error;
     }
     await chrome.action.setBadgeText({ tabId, text: '' });
+    return session;
   } catch (error) {
     console.error('LegacyLens could not start capture', error);
     await chrome.action.setBadgeText({ tabId, text: 'ERR' });
+    return undefined;
   }
 }
 
@@ -200,6 +205,18 @@ export default defineBackground(() => {
     const senderOrigin = originOf(sender.url);
     if (tabId === undefined || !senderOrigin || !msg || typeof msg.type !== 'string') return;
     const run = async () => {
+      if (fixtureMode && msg.type === 'fixture.capture.start' && typeof msg.projectId === 'string') {
+        const selected = ((await chrome.storage.session.get(selectedProjectsKey))[selectedProjectsKey] ?? {}) as Record<string, string>;
+        await chrome.storage.session.set({ [selectedProjectsKey]: { ...selected, [String(tabId)]: msg.projectId } });
+        const session = await startCapture(sender.tab, { requestPermission: false, projectId: msg.projectId });
+        if (!session) throw new Error('Fixture capture did not start; inspect the extension service worker log.');
+        return { ok: true, session };
+      }
+      if (fixtureMode && msg.type === 'fixture.capture.stop') {
+        await stopCapture(sender.tab);
+        if (controller.get(tabId)) throw new Error('Fixture capture did not stop; inspect the extension service worker log.');
+        return { ok: true };
+      }
       if (msg.type === 'capture.event' && typeof msg.kind === 'string' && typeof msg.sessionId === 'string') {
         await controller.restore();
         const active = controller.get(tabId);

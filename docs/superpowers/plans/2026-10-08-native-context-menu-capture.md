@@ -10,7 +10,7 @@
 
 **Spec path:** `docs/superpowers/specs/2026-10-08-native-context-menu-capture-design.md`
 
-**Global Constraints:** Do not add a page-injected popup or controls. The Start command must request the optional site permission in the menu click gesture before any `await`. Keep project selection scoped to a tab and active captures scoped to their existing `CaptureController` state. Make script injection and command handling idempotent. Distinguish native-host connection failure from an empty project list. No automated tests are added or run in this implementation; verify with the extension build and the manual acceptance flow below.
+**Global Constraints:** Do not add a page-injected popup or controls. The Start command must request the optional site permission in the menu click gesture before any `await`. Keep project selection scoped to a tab and active captures scoped to their existing `CaptureController` state. Make script injection and command handling idempotent. Distinguish native-host connection failure from an empty project list. The original implementation avoided running tests; after CI exposed E2E assumptions about the removed panel, those existing fixture flows were updated to use a fixture-only capture driver.
 
 **Review Focus:** Chrome's context-menu lifecycle and `refresh()` behavior; permission request still occurs in the direct click gesture; menu item IDs safely represent arbitrary project IDs; start/stop state stays consistent across tab navigation and service-worker restarts; content scripts leave no visual UI and clean up listeners/state; Windows instructions correctly explain the host registration and PowerShell policy failure.
 
@@ -65,10 +65,21 @@
 - [ ] **Step 3: Verify management and no injected UI.** Confirm Manage and toolbar click open `investigation.html`; the application page never displays a LegacyLens panel or controls. Reopen the context menu repeatedly and confirm there is only one parent and one set of actions.
 - [x] **Step 4: Record manual outcome.** Not run: this environment has no access to the user’s Windows Chrome/Edge profile or registered native host, so browser acceptance still needs confirmation there.
 
+## Task 5: Adapt fixture E2E flows after CI failure
+
+**Files:** Modify `apps/extension/entrypoints/background.ts` and `apps/extension/entrypoints/content.ts` with fixture-only commands; create `tests/e2e/support/capture.ts`; update `tests/e2e/legacy-click.spec.ts`, `modern-click.spec.ts`, `redeploy.spec.ts`, `recovery.spec.ts`, and `causality.spec.ts`.
+
+**Interfaces:** Test driver is enabled only when the built manifest explicitly contains the fixture host permission `http://127.0.0.1/*`. It starts/stops capture through the same `CaptureController` and content commands; normal extension builds do not accept fixture commands.
+
+- [x] Replace old `selection.open`/panel/button assumptions with the fixture capture helper while preserving the real page selection, browser event, host, and investigation checks.
+- [x] Keep the helper gated by the fixture manifest permission, which is added only by fixture builds.
+- [x] Verify production typecheck/build, fixture build and manifest, and Playwright test discovery. Actual E2E execution requires PowerShell and the Windows fixtures, unavailable in this Linux environment.
+- [ ] Confirm the updated `legacy-click`, `modern-click`, and `redeploy` jobs pass on GitHub Actions.
+
 ## Self-review
 
 - Spec coverage: native submenu, radio selection per tab, start/stop, management, toolbar behavior, no page UI, host error state, host setup documentation, and build/manifest acceptance are all represented.
 - Step ordering: content lifecycle protocol is defined before the background sends commands; menu state and capture integration precede documentation and manual acceptance.
 - Interface consistency: menu starts use the existing `CaptureController`; content events preserve the existing validated `capture.event` contract; stop navigation uses the existing investigation query parameters.
 - Highest-risk items have explicit checks: user-gesture permission request (Task 2 Step 5); host error vs empty list (Task 2 Step 3 / Task 4 Step 1); per-tab selection (Task 2 Step 4 / Task 4 Step 2); idempotent content cleanup (Task 1 Steps 3–4 / Task 4 Step 3); PowerShell host recovery (Task 3 Step 2).
-- Verification scope follows the instruction not to add or run automated tests. Typecheck/build and manifest inspection passed; manual browser acceptance remains unverified because the target Windows browser and native host are unavailable here.
+- Original extension typecheck/build and generated manifest passed; the fixture build and Playwright discovery also passed after the CI follow-up. Windows fixture execution and manual acceptance remain pending CI and access to the target Windows browser/host.

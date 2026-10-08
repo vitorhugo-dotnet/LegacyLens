@@ -1,9 +1,10 @@
-import { test, expect, chromium, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, chromium, type BrowserContext } from '@playwright/test';
 import { readFileSync, rmSync, mkdirSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { startFixtureCapture, stopFixtureCapture } from './support/capture.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const cache = join(root, '.fixture-cache');
@@ -22,16 +23,6 @@ function run(command: string, args: string[], timeout = 180_000, env = process.e
   const message=readFileSync(outputPath,'utf8');
   unlinkSync(outputPath);
   if (result.status !== 0) throw new Error(`FIXTURE_SETUP: ${command} failed (exit ${result.status}): ${(message || result.error?.message || 'no output').slice(-1000)}`);
-}
-
-async function openCapturePanel(worker: import('@playwright/test').Worker, page: Page): Promise<void> {
-  await worker.evaluate(async (url) => {
-    const tabs = await chrome.tabs.query({});
-    const tab = tabs.find((item) => item.url === url);
-    if (!tab?.id) throw new Error('fixture tab is unavailable');
-    await chrome.tabs.sendMessage(tab.id,{type:'selection.open'});
-  },page.url());
-  await expect(page.locator('[data-legacylens-ui]')).toBeVisible();
 }
 
 test('selected save traverses two exact request spans into JSF, bean, service, DAO and orders; DOM only has no Java events', async () => {
@@ -70,14 +61,12 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
         window.addEventListener(name,(event)=>{const detail=(event as CustomEvent).detail??{};probe.push({name,source:detail.source,propagation:detail.propagation,code:detail.code,hasSpan:Boolean(detail.spanId),hasTraceparent:Boolean(detail.traceparent)});});
     });
     await expect(page.locator('#orderForm\\:saveOrder')).toBeVisible();
-    await openCapturePanel(worker,page);
-    await page.locator('[data-legacylens-ui] select').selectOption(state.projectId);
     const activeTrace = async ():Promise<string> => worker.evaluate(async () => {
       const stored = await chrome.storage.session.get('legacylens.activeCaptures.v1');
       return stored['legacylens.activeCaptures.v1']?.[0]?.session?.id as string;
     });
 
-    await page.getByRole('button',{name:'Capture next interaction'}).click();
+    await startFixtureCapture(worker,page,state.projectId);
     await expect.poll(activeTrace,{timeout:15_000,message:'FIXTURE_SETUP: native host did not start a capture'}).toMatch(/^[0-9a-f]{32}$/);
     const domTrace = await activeTrace();
     await page.locator('#domOnly').click();
@@ -86,7 +75,7 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
     const dom = await investigation(domTrace);
     expect(dom.events.items.some((event)=>event.kind==='jsf.click')).toBe(true);
     expect(dom.events.items.filter((event)=>event.kind==='http.server'||event.kind.startsWith('method.')||event.kind.startsWith('db.')),'DOM-only action must have zero Java events').toHaveLength(0);
-    await page.getByRole('button',{name:'Stop capture'}).click();
+    await stopFixtureCapture(worker,page);
     await expect.poll(activeTrace,{timeout:15_000,message:'first capture did not stop'}).toBeUndefined();
     await page.evaluate(() => {
       (window as any).__legacyLensBaseline = { fetch, handle: (window as any).PrimeFaces.ajax.Request.handle };
@@ -96,7 +85,7 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
     const observedRequests:{parent?:string}[]=[];
     page.on('request',(request)=>{if(request.url().includes('/legacy-fixture/orders.xhtml'))observedRequests.push({parent:request.headers()['traceparent']});});
     const captureStartedAt = Date.now();
-    await page.getByRole('button',{name:'Capture next interaction'}).click();
+    await startFixtureCapture(worker,page,state.projectId);
     await expect.poll(activeTrace,{timeout:15_000,message:'FIXTURE_SETUP: second native capture did not start'}).toMatch(/^[0-9a-f]{32}$/);
     const trace = await activeTrace();
     expect(trace,'second capture must have a new trace ID').not.toBe(domTrace);
@@ -130,7 +119,7 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
       };
     },{timeout:30_000}).toMatchObject({insert:true,update:true});
     const investigationPage = context.waitForEvent('page',{timeout:15_000});
-    await page.getByRole('button',{name:'Stop capture'}).click();
+    await stopFixtureCapture(worker,page);
     await expect.poll(activeTrace,{timeout:15_000,message:'second capture did not stop'}).toBeUndefined();
     const result = await investigation(trace);
     expect(result.agentStatus.state).toBe('online');

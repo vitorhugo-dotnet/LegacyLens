@@ -1,9 +1,10 @@
-import { test, expect, chromium, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, chromium, type BrowserContext } from '@playwright/test';
 import { readFileSync, rmSync, mkdirSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { startFixtureCapture } from './support/capture.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const cache = join(root, '.fixture-cache');
@@ -21,15 +22,6 @@ function run(command: string, args: string[], timeout = 180_000, env = process.e
   finally { closeSync(fd); }
   const output = readFileSync(path, 'utf8'); unlinkSync(path);
   if (result.status !== 0) throw new Error(`FIXTURE_SETUP: ${command} failed (${result.status}): ${(output || result.error?.message || 'no output').slice(-1000)}`);
-}
-
-async function openPanel(worker: import('@playwright/test').Worker, page: Page): Promise<void> {
-  await worker.evaluate(async (url) => {
-    const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
-    if (!tab?.id) throw new Error('fixture tab is unavailable');
-    await chrome.tabs.sendMessage(tab.id, { type: 'selection.open' });
-  }, page.url());
-  await expect(page.locator('[data-legacylens-ui]')).toBeVisible();
 }
 
 test('recovers after host loss and background restart, preserves overflow events, marks capture incomplete, and keeps the app responsive', async () => {
@@ -66,10 +58,8 @@ test('recovers after host loss and background restart, preserves overflow events
         return original?.call(this, event);
       };
     });
-    await openPanel(worker, page);
-    await page.locator('[data-legacylens-ui] select').selectOption(state.projectId);
     await page.locator('#orderForm\\:note').fill('recovery-fixture');
-    await page.getByRole('button', { name: 'Capture next interaction' }).click();
+    await startFixtureCapture(worker,page,state.projectId);
     const activeTrace = () => worker.evaluate(async () => ((await chrome.storage.session.get('legacylens.activeCaptures.v1'))['legacylens.activeCaptures.v1'] ?? [])[0]?.session?.id as string | undefined);
     await expect.poll(activeTrace, { timeout: 15_000 }).toMatch(/^[a-f0-9]{32}$/);
     const traceId = (await activeTrace())!;

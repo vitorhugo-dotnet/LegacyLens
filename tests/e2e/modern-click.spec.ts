@@ -1,9 +1,10 @@
-import { test, expect, chromium, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, chromium, type BrowserContext } from '@playwright/test';
 import { readFileSync, rmSync, mkdirSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { startFixtureCapture } from './support/capture.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const cache = join(root, '.fixture-cache');
@@ -47,16 +48,9 @@ test('captures a Jakarta Faces action and reports exact runtime capabilities', a
     expect(new URL(worker.url()).hostname).toBe(extensionId);
     const page = await context.newPage();
     await page.goto(`http://127.0.0.1:${state.httpPort}/modern-fixture/orders.xhtml`);
-    await worker.evaluate(async (url) => {
-      const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
-      if (!tab?.id) throw new Error('fixture tab is unavailable');
-      await chrome.tabs.sendMessage(tab.id, { type: 'selection.open' });
-    }, page.url());
-    await expect(page.locator('[data-legacylens-ui]')).toBeVisible();
-    await page.locator('[data-legacylens-ui] select').selectOption(state.projectId);
     await page.locator('#orderForm\\:note').fill('modern-fixture');
     const captureStartedAt = Date.now();
-    await page.getByRole('button', { name: 'Capture next interaction' }).click();
+    await startFixtureCapture(worker,page,state.projectId);
     const activeTrace = () => worker.evaluate(async () => ((await chrome.storage.session.get('legacylens.activeCaptures.v1'))['legacylens.activeCaptures.v1'] ?? [])[0]?.session?.id as string | undefined);
     await expect.poll(activeTrace, { timeout: 15_000 }).toMatch(/^[a-f0-9]{32}$/);
     const traceId = (await activeTrace())!;

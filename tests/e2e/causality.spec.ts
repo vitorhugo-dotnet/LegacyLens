@@ -1,9 +1,10 @@
-import { test, expect, chromium, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, chromium, type BrowserContext } from '@playwright/test';
 import { readFileSync, rmSync, mkdirSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { startFixtureCapture, stopFixtureCapture } from './support/capture.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const cache = join(root, '.fixture-cache');
@@ -21,15 +22,6 @@ function run(command: string, args: string[], timeout = 180_000, env = process.e
   finally { closeSync(fd); }
   const output = readFileSync(path, 'utf8'); unlinkSync(path);
   if (result.status !== 0) throw new Error(`FIXTURE_SETUP: ${command} failed (${result.status}): ${(output || result.error?.message || 'no output').slice(-1000)}`);
-}
-
-async function openPanel(worker: import('@playwright/test').Worker, page: Page): Promise<void> {
-  await worker.evaluate(async (url) => {
-    const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
-    if (!tab?.id) throw new Error('fixture tab is unavailable');
-    await chrome.tabs.sendMessage(tab.id, { type: 'selection.open' });
-  }, page.url());
-  await expect(page.locator('[data-legacylens-ui]')).toBeVisible();
 }
 
 test('keeps two selected clicks in separate causal trees, links timer and request effects, and leaves polling unlinked', async () => {
@@ -56,8 +48,6 @@ test('keeps two selected clicks in separate causal trees, links timer and reques
     await page.goto(`http://127.0.0.1:${state.httpPort}/legacy-fixture/orders.xhtml`);
     const pageRequests: Array<{ url: string; traceparent?: string }> = [];
     page.on('request', (request) => { if (request.url().includes('/legacy-fixture/orders.xhtml')) pageRequests.push({ url: request.url(), traceparent: request.headers()['traceparent'] }); });
-    await openPanel(worker, page);
-    await page.locator('[data-legacylens-ui] select').selectOption(state.projectId);
     await page.evaluate(() => {
       const save = document.getElementById('orderForm:saveOrder')!;
       (window as any).__captureBaseline = { fetch, handle: (window as any).PrimeFaces.ajax.Request.handle };
@@ -71,7 +61,7 @@ test('keeps two selected clicks in separate causal trees, links timer and reques
     for (let index = 0; index < 2; index++) {
       await page.locator('#orderForm\\:message').evaluate((message) => { message.textContent = ''; });
       await page.locator('#orderForm\\:note').fill(`causality-${index}`);
-      await page.getByRole('button', { name: 'Capture next interaction' }).click();
+      await startFixtureCapture(worker,page,state.projectId);
       await expect.poll(activeTrace, { timeout: 15_000 }).toMatch(/^[a-f0-9]{32}$/);
       await expect.poll(() => page.evaluate(() => ({
         fetch: fetch !== (window as any).__captureBaseline.fetch,
@@ -89,7 +79,7 @@ test('keeps two selected clicks in separate causal trees, links timer and reques
       await expect.poll(() => pageRequests.some((request) => request.url.includes('timer=selected')
         && new RegExp(`^00-${trace}-[a-f0-9]{16}-01$`).test(request.traceparent ?? '')), { timeout: 5_000,
         message: 'selected timer fetch must carry the active traceparent' }).toBe(true);
-      await page.getByRole('button', { name: 'Stop capture' }).click();
+      await stopFixtureCapture(worker,page);
       await expect.poll(activeTrace, { timeout: 15_000 }).toBeUndefined();
     }
     expect(new Set(traces).size).toBe(2);

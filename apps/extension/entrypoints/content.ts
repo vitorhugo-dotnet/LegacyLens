@@ -17,6 +17,7 @@ export default defineContentScript({
     const global = globalThis as typeof globalThis & { __legacylensContentScriptInstalled?: boolean };
     if (global.__legacylensContentScriptInstalled) return;
     global.__legacylensContentScriptInstalled = true;
+    const fixtureMode = chrome.runtime.getManifest().host_permissions?.includes('http://127.0.0.1/*') === true;
 
     let session: CaptureSession | undefined;
     let nonce = '';
@@ -50,6 +51,16 @@ export default defineContentScript({
     };
     chrome.runtime.onMessage.addListener((message: unknown, _sender, respond) => {
       const msg = message as { type?: unknown; projectId?: unknown; session?: unknown; origin?: unknown; traceId?: unknown };
+      if (fixtureMode && msg?.type === 'fixture.capture.start' && typeof msg.projectId === 'string') {
+        void ask<{ ok: boolean; session: CaptureSession }>({ type: 'fixture.capture.start', projectId: msg.projectId })
+          .then(respond, (error: unknown) => respond({ error: error instanceof Error ? error.message : 'Fixture capture start failed' }));
+        return true;
+      }
+      if (fixtureMode && msg?.type === 'fixture.capture.stop') {
+        void ask<{ ok: boolean }>({ type: 'fixture.capture.stop' })
+          .then(respond, (error: unknown) => respond({ error: error instanceof Error ? error.message : 'Fixture capture stop failed' }));
+        return true;
+      }
       try {
         if (msg?.type === 'capture.begin' && typeof msg.projectId === 'string' && typeof msg.origin === 'string'
           && msg.session && typeof msg.session === 'object') {
