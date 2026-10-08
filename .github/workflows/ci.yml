@@ -274,5 +274,5 @@ jobs:
           if ($manifest.version -ne $env:RELEASE_VERSION -or $manifest.commit -ne $env:GITHUB_SHA) {
             throw 'Package manifest does not match the release version and source commit.'
           }
-          gh release create $env:RELEASE_VERSION $zip $checksums --target $env:GITHUB_SHA --title "LegacyLens $env:RELEASE_VERSION" --generate-notes
+          gh release create $env:RELEASE_VERSION $zip $checksums --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "LegacyLens $env:RELEASE_VERSION" --generate-notes
           if ($LASTEXITCODE -ne 0) { throw "Could not publish GitHub Release $env:RELEASE_VERSION." }
