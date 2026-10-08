@@ -20,7 +20,27 @@ O ZIP de release contém o core, o host de mensagens nativas, a extensão Chromi
    .\legacylens.exe serve
    ```
 
-5. Abra uma aplicação JSF compatível, selecione uma interação e inicie a captura pela extensão.
+5. Abra uma aplicação JSF compatível. Clique com o botão direito na página e abra **LegacyLens**. Selecione o projeto, reabra o submenu e escolha **Iniciar captura**. Autorize o acesso ao site quando solicitado, selecione o elemento JSF e execute a interação. Para finalizar, escolha **Parar captura**; a investigação da captura será aberta. **Gerenciar projetos** e o ícone da extensão abrem a página de registro, indexação e pesquisa.
+
+## Diagnóstico do host nativo
+
+O comando `legacylens.exe status` verifica somente a API HTTP do core. A extensão conversa com `legacylens-host.exe` pelo Native Messaging do navegador, que também exige o manifesto `io.legacylens.host` registrado no perfil atual e autorizado para o ID exato da extensão. Por isso, o core pode responder como saudável enquanto o submenu mostra **Host nativo desconectado**.
+
+Confira estes pontos:
+
+1. Deixe `legacylens.exe serve` em execução e confirme a resposta com `legacylens.exe status`.
+2. Em `chrome://extensions` ou `edge://extensions`, confirme que a extensão está habilitada e copie novamente seu ID. O ID deve ser o mesmo usado em `-ExtensionId`; recarregar uma extensão unpacked com outra identidade exige registrar o host para o novo ID.
+3. Confirme que o pacote extraído ainda existe no caminho informado em `-PackageDirectory` e que contém `legacylens-host.exe`.
+4. Execute novamente o instalador para o usuário atual. Se o PowerShell bloquear o script por política de execução, abra uma sessão PowerShell nessa pasta e rode:
+
+   ```powershell
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+   .\scripts\install-native-host.ps1 -PackageDirectory 'C:\Program Files\LegacyLens' -ExtensionId '<ID exibido pelo navegador>'
+   ```
+
+   O escopo `Process` vale somente para essa janela do PowerShell; não altera a política permanente do usuário ou da máquina. O registro também é feito somente no usuário atual.
+
+5. Recarregue a extensão na página de extensões e abra novamente o menu de contexto. Se o host continuar desconectado, confirme se o navegador e o host estão sendo executados no mesmo usuário do Windows e repita a instalação com o ID atualmente exibido.
 
 Não é necessário instalar Go ou Node. Java é necessário para executar o agente/analisador incluído. A análise estática básica continua disponível sem CodeQL CLI.
 

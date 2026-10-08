@@ -41,7 +41,7 @@ Esse pacote é experimental e não promete instalador, registro automático do h
 
 1. Baixe o `legacylens-windows-x64.zip` mais recente na aba [Releases](https://github.com/vitorhugo-dotnet/LegacyLens/releases) e extraia-o numa pasta permanente.
 2. Carregue a pasta `extension` no Chrome ou Edge pela página de extensões, com o modo de desenvolvedor ativado.
-3. Registre o host nativo para o ID da extensão e registre a pasta-fonte que deseja investigar. Os comandos completos estão em [Instalação no Windows](docs/user/windows-installation.md).
+3. Registre o host nativo usando o ID mostrado na página de extensões. Cadastre um projeto pela página da extensão ou pelo comando abaixo. Os detalhes estão em [Instalação no Windows](docs/user/windows-installation.md).
 
    ```powershell
    .\scripts\install-native-host.ps1 -PackageDirectory 'C:\Program Files\LegacyLens' -ExtensionId '<ID exibido pelo navegador>'
@@ -49,7 +49,10 @@ Esse pacote é experimental e não promete instalador, registro automático do h
    .\legacylens.exe serve
    ```
 
-4. Deixe o terminal com `serve` aberto. Abra a aplicação JSF no Chrome ou Edge, clique no ícone do LegacyLens ou use **LegacyLens: capturar interação** no menu do botão direito. Autorize o acesso ao site quando solicitado, escolha o projeto e inicie a captura antes de realizar a interação. Ao parar a captura, a extensão abre a investigação; também é possível indexar o projeto e buscar código na página de investigação. Os dados do projeto são mantidos localmente. Em outro terminal, execute `legacylens.exe status` para verificar se o core está respondendo.
+4. Deixe o terminal com `serve` aberto e abra a aplicação JSF. Clique com o botão direito na página e abra o submenu **LegacyLens**. Escolha o projeto na lista; essa seleção vale somente para a aba atual. Abra o submenu novamente e escolha **Iniciar captura**. Na primeira captura do site, autorize o acesso solicitado pelo navegador, selecione o elemento JSF e realize a interação.
+5. Para encerrar, abra o submenu **LegacyLens** e escolha **Parar captura**. A página de investigação será aberta para o projeto e a captura. Use **Gerenciar projetos** no submenu ou clique no ícone da extensão para cadastrar projetos, indexar código e pesquisar resultados. Os dados do projeto ficam na máquina local.
+
+`legacylens.exe status` verifica se a API HTTP local está respondendo. A extensão também precisa do host de mensagens nativas registrado para o ID correto; portanto, o core pode estar saudável e o menu ainda mostrar **Host nativo desconectado**. Consulte [Diagnóstico do host nativo](docs/user/windows-installation.md#diagnostico-do-host-nativo) nesse caso.
 
 ### Publicação de releases
 
