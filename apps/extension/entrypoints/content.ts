@@ -1,5 +1,5 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
-import type { ProjectListResult, CaptureSession } from '@legacylens/contracts/src/protocol.ts';
+import type { CaptureSession } from '@legacylens/contracts/src/protocol.ts';
 import { chooseElement } from '../src/capture/selection.ts';
 import { toStackMetadata } from '../src/capture/stack.ts';
 
@@ -22,80 +22,62 @@ export default defineContentScript({
     let nonce = '';
     let selectedSource = '';
     let clickEventId = '';
-    const open = async () => {
-      const existing = document.querySelector('[data-legacylens-ui]');
-      if (existing) { existing.remove(); return; }
-      const panel = document.createElement('div');
-      panel.dataset.legacylensUi = 'true';
-      Object.assign(panel.style, { position: 'fixed', top: '12px', right: '12px', zIndex: '2147483647', background: '#fff', color: '#111', border: '2px solid #3677db', padding: '12px', font: '14px sans-serif' });
-      const label = document.createElement('label'); label.textContent = 'LegacyLens project: ';
-      const select = document.createElement('select');
-      const start = document.createElement('button'); start.textContent = 'Capture next interaction';
-      const stop = document.createElement('button'); stop.textContent = 'Stop capture';
-      const projectsButton = document.createElement('button'); projectsButton.textContent = 'Manage projects';
-      const status = document.createElement('div'); status.setAttribute('role', 'status');
-      label.append(select); panel.append(label, start, stop, projectsButton, status); document.documentElement.append(panel);
-      projectsButton.onclick = () => { void ask({ type: 'projects.open' }).catch(() => { status.textContent = 'Could not open project management.'; }); };
-      try {
-        let offset = 0;
-        let count = 0;
-        for (;;) {
-          const projects = await ask<ProjectListResult>({ type: 'projects.list', offset });
-          for (const project of projects.items) { const option = document.createElement('option'); option.value = project.id; option.textContent = project.name; select.append(option); count++; }
-          if (!projects.hasMore) break;
-          offset += projects.limit;
-        }
-        if (!count) status.textContent = 'Abra a investigação do LegacyLens para registrar um projeto local.';
-      } catch { status.textContent = 'Local LegacyLens host unavailable.'; }
-      start.onclick = async () => {
-        if (!select.value) return;
-        try {
-          const reply = await ask<{ session: CaptureSession }>({ type: 'capture.start', projectId: select.value });
-          session = reply.session;
-          selectedSource = ''; clickEventId = '';
-          nonce = [...crypto.getRandomValues(new Uint8Array(16))].map((n) => n.toString(16).padStart(2, '0')).join('');
-          window.dispatchEvent(new CustomEvent('legacylens:start', { detail: { nonce, traceId: session.id, origin: location.origin } }));
-          status.textContent = 'Click the JSF element to capture its next Ajax action.';
-          chooseElement(document, (id) => {
-            selectedSource = id;
-            do { clickEventId = [...crypto.getRandomValues(new Uint8Array(8))].map((byte) => byte.toString(16).padStart(2, '0')).join(''); }
-            while (/^0+$/.test(clickEventId));
-            window.dispatchEvent(new CustomEvent('legacylens:select', { detail: { nonce, source: id } }));
-            void ask({ type: 'capture.event', sessionId: session!.id, kind: 'jsf.click', eventId: clickEventId, metadata: { source: id } }).catch(() => { status.textContent = 'Capture transport interrupted; investigation has a gap.'; });
-            status.textContent = `Selected ${id}. Capture continues until stopped.`;
-          });
-        } catch (error) { status.textContent = error instanceof Error ? error.message : 'Capture failed'; }
-      };
-      stop.onclick = async () => {
-        try { const finished = session; await ask({ type: 'capture.stop' }); session = undefined; selectedSource = ''; clickEventId = ''; window.dispatchEvent(new CustomEvent('legacylens:stop', { detail: { nonce } })); status.textContent = 'Capture stopped. Opening investigation.'; if (finished) await ask({ type: 'investigation.open', projectId: finished.projectId, traceId: finished.id }); }
-        catch { status.textContent = 'Could not stop capture; retry.'; }
-      };
+    let stopChoosing: (() => void) | undefined;
+    const resetCapture = () => {
+      stopChoosing?.(); stopChoosing = undefined;
+      if (nonce) window.dispatchEvent(new CustomEvent('legacylens:stop', { detail: { nonce } }));
+      session = undefined; selectedSource = ''; clickEventId = ''; nonce = '';
     };
-    chrome.runtime.onMessage.addListener((message: unknown) => { if ((message as { type?: string })?.type === 'selection.open') void open(); });
+    const beginCapture = (projectId: string, nextSession: CaptureSession) => {
+      if (nextSession.projectId !== projectId || !/^[a-f0-9]{32}$/i.test(nextSession.id)
+        || Date.parse(nextSession.expiresAt) <= Date.now()) throw new Error('Invalid or expired capture session');
+      if (session?.id === nextSession.id) return;
+      resetCapture();
+      session = nextSession;
+      nonce = [...crypto.getRandomValues(new Uint8Array(16))].map((n) => n.toString(16).padStart(2, '0')).join('');
+      window.dispatchEvent(new CustomEvent('legacylens:start', { detail: { nonce, traceId: session.id, origin: location.origin } }));
+      stopChoosing = chooseElement(document, (id) => {
+        selectedSource = id;
+        do { clickEventId = [...crypto.getRandomValues(new Uint8Array(8))].map((byte) => byte.toString(16).padStart(2, '0')).join(''); }
+        while (/^0+$/.test(clickEventId));
+        window.dispatchEvent(new CustomEvent('legacylens:select', { detail: { nonce, source: id } }));
+        void ask({ type: 'capture.event', sessionId: session!.id, kind: 'jsf.click', eventId: clickEventId, metadata: { source: id } })
+          .catch((error) => console.warn('LegacyLens capture event failed', error));
+      });
+    };
+    chrome.runtime.onMessage.addListener((message: unknown, _sender, respond) => {
+      const msg = message as { type?: unknown; projectId?: unknown; session?: unknown; traceId?: unknown };
+      try {
+        if (msg?.type === 'capture.begin' && typeof msg.projectId === 'string' && msg.session && typeof msg.session === 'object') {
+          beginCapture(msg.projectId, msg.session as CaptureSession);
+          respond({ ok: true });
+        } else if (msg?.type === 'capture.end' && typeof msg.traceId === 'string') {
+          if (!session || session.id === msg.traceId) resetCapture();
+          respond({ ok: true });
+        }
+      } catch (error) {
+        console.error('LegacyLens could not update capture state', error);
+        respond({ error: error instanceof Error ? error.message : 'Capture setup failed' });
+      }
+      return false;
+    });
     window.addEventListener('legacylens:ajax', (event) => {
       const detail = (event as CustomEvent).detail as { nonce?: string; source?: string; propagation?: string; traceparent?: string; spanId?: string; code?: string };
       if (!session || !detail || detail.nonce !== nonce) return;
       if (typeof detail.code === 'string' && /^UNSUPPORTED_[A-Z_]+$/.test(detail.code)) {
         void ask({ type: 'capture.event', sessionId: session.id, kind: 'extension.diagnostic', metadata: { code: detail.code } }).catch(() => {});
-        const status = document.querySelector('[data-legacylens-ui] [role="status"]');
-        if (status) status.textContent = 'This page does not expose the supported PrimeFaces 5 Ajax API.';
+        console.warn('LegacyLens: page does not expose the supported PrimeFaces Ajax API.');
         return;
       }
       if (typeof detail.source !== 'string' || detail.source.length > 256) return;
       if (detail.source !== selectedSource || !clickEventId) return;
       if (detail.propagation === 'attempted' && !detail.spanId && !detail.traceparent) {
-        void ask({ type: 'capture.event', sessionId: session.id, kind: 'primefaces.propagation_attempt', parentEventId: clickEventId, metadata: { source: detail.source } }).catch(() => {
-          const status = document.querySelector('[data-legacylens-ui] [role="status"]');
-          if (status) status.textContent = 'Capture transport interrupted; investigation has a gap.';
-        });
+        void ask({ type: 'capture.event', sessionId: session.id, kind: 'primefaces.propagation_attempt', parentEventId: clickEventId, metadata: { source: detail.source } }).catch((error) => console.warn('LegacyLens capture transport interrupted', error));
         return;
       }
       if (detail.propagation !== 'propagated' || !detail.traceparent || !detail.spanId) return;
       if (detail.traceparent !== `00-${session.id}-${detail.spanId}-01` || !/^[a-f0-9]{16}$/i.test(detail.spanId)) return;
-      void ask({ type: 'capture.event', sessionId: session.id, kind: 'primefaces.ajax', parentEventId: clickEventId, metadata: { source: detail.source, spanId: detail.spanId } }).catch(() => {
-        const status = document.querySelector('[data-legacylens-ui] [role="status"]');
-        if (status) status.textContent = 'Capture transport interrupted; investigation has a gap.';
-      });
+      void ask({ type: 'capture.event', sessionId: session.id, kind: 'primefaces.ajax', parentEventId: clickEventId, metadata: { source: detail.source, spanId: detail.spanId } }).catch((error) => console.warn('LegacyLens capture transport interrupted', error));
     });
     window.addEventListener('legacylens:network', (event) => {
       const detail = (event as CustomEvent).detail as { nonce?: string; source?: string; transport?: string; propagation?: string;
@@ -111,10 +93,7 @@ export default defineContentScript({
         ...(propagated ? { spanId: detail.spanId } : {}),
         ...stack };
       void ask({ type: 'capture.event', sessionId: session.id, kind: propagated ? 'browser.network' : 'browser.propagation_attempt',
-        parentEventId: clickEventId, metadata }).catch(() => {
-        const status = document.querySelector('[data-legacylens-ui] [role="status"]');
-        if (status) status.textContent = 'Capture transport interrupted; investigation has a gap.';
-      });
+        parentEventId: clickEventId, metadata }).catch((error) => console.warn('LegacyLens capture transport interrupted', error));
     });
   },
 });
