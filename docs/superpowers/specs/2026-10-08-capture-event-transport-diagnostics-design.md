@@ -2,7 +2,7 @@
 
 ## Estado
 
-Spec de arquitetura para localizar a perda do evento `jsf.click` e orientar uma possível troca do transporte entre content script e background. A decisão atual é instrumentar o fluxo existente primeiro. O uso de `chrome.runtime.Port` é uma alternativa condicionada ao resultado dessa instrumentação; ainda não está aprovado como mudança de implementação.
+Spec de arquitetura para localizar a perda do evento `jsf.click` e orientar uma possível troca do transporte entre content script e background. A instrumentação do fluxo one-shot foi executada e o CI localizou uma ausência de confirmação entre content script e background. `chrome.runtime.Port` passa a ser a candidata do redesenho; sua implementação depende da revisão e aprovação do plano de follow-up.
 
 ## Objetivo
 
@@ -43,8 +43,11 @@ Os resultados abaixo vêm dos traces e jobs de GitHub Actions. Em todas as execu
 | `c333286` | [37795107658](https://github.com/vitorhugo-dotnet/LegacyLens/actions/runs/37795107658) | `capture.start` e o handshake `legacylens:start` ocorreram. A página mudou o texto do botão após o clique, mas o teste não observou `legacylens:select` no prazo. O E2E moderno também não encontrou `jsf.click`. |
 | `2c26536` | [37796025459](https://github.com/vitorhugo-dotnet/LegacyLens/actions/runs/37796025459) | Com a detecção do alvo sem `instanceof`, o teste passou pela asserção de `legacylens:select`, mas `investigation.get` continuou retornando zero eventos para o trace DOM-only. O E2E moderno não encontrou `jsf.click`. |
 | `e87e04c` | [37796685079](https://github.com/vitorhugo-dotnet/LegacyLens/actions/runs/37796685079) | A tentativa de obter a origem da aba como fallback não mudou o resultado: o E2E legado continuou sem evento persistido e o moderno continuou sem `jsf.click`. |
+| `1381b09` | [37818722260](https://github.com/vitorhugo-dotnet/LegacyLens/actions/runs/37818722260) | O E2E esperou 45 s pela persistência. Para o mesmo clique, registrou `content.selection.accepted`, `content.send.started` e `content.send.timeout` após 35.002 ms; nenhum `background.receive` apareceu e a consulta continuou vazia. Trace `d39d8ec05173320e645946807567c37b`, evento `03b573e39396ae5f`. Os checks requeridos passaram; os E2E legado e Jakarta falharam. |
 
-As falhas de `2c26536` e `e87e04c` mostram que a seleção chega ao evento `legacylens:select`; não mostram onde `capture.event` se perde. Os traces não registraram erro no console. Isso não prova que o listener do background recebeu a mensagem nem que a chamada nativa terminou; esses estágios ainda não são observáveis de ponta a ponta.
+As falhas de `2c26536` e `e87e04c` mostravam que a seleção chega ao evento `legacylens:select`, mas não localizavam a perda. O run `1381b09` acrescentou a evidência correlacionada: o helper do content iniciou `chrome.runtime.sendMessage`, não recebeu ACK nem NACK e expirou após 35.002 ms; o background não registrou recebimento para o mesmo trace/evento. A falha fica localizada na fronteira one-shot content→background (entrega ou ciclo de vida da resposta), antes da validação e do host. O evento não apareceu em `investigation.get`.
+
+O gate da Fase 1 está atendido. A candidata `Port` descrita na Fase 2 tem um plano de implementação separado em `docs/superpowers/plans/2026-10-08-capture-port-reliability.md`; a mudança de arquitetura ainda aguarda aprovação desse plano.
 
 A validação local de TypeScript e o build da extensão passaram para as alterações anteriores. A execução E2E da fixture depende de PowerShell/Windows e a autoridade final de validação é o CI Windows.
 
@@ -56,12 +59,12 @@ A validação local de TypeScript e o build da extensão passaram para as altera
 4. A verificação `instanceof HTMLElement` não reconhecia o alvo do clique em todos os contextos usados pelo Chrome. A seleção estrutural do nó fez `legacylens:select` aparecer no teste, mas não restaurou a persistência do evento.
 5. O fallback de `sender.url` para `sender.tab.url` não resolveu a falta do evento. A origem continua sendo validada contra a origem da sessão, mas essa hipótese não deve ser tratada como causa confirmada.
 
-Essas tentativas reduziram o problema até depois da seleção do DOM. Não justificam mais mudanças sem observar explicitamente as fronteiras seguintes.
+As tentativas anteriores reduziram o problema até depois da seleção do DOM. A instrumentação posterior observou explicitamente as fronteiras seguintes; o resultado está na tabela acima.
 
 ## Abordagens consideradas
 
-1. **Instrumentar o transporte one-shot atual (selecionada para a próxima etapa).** Adicionar sinais correlacionados antes/depois de `sendMessage`, no recebimento e resultado de validação do background, em `trace.ingest` e na consulta final. Mantém interfaces e comportamento; deve identificar a fronteira exata antes de qualquer redesenho.
-2. **Usar uma conexão `chrome.runtime.Port`.** O content script estabelece uma conexão com o background, negocia a aba/sessão, envia eventos com identificador estável e recebe ACK/NACK. A conexão pode ser reaberta após desconexão e retransmitir eventos não confirmados. É candidata se os dados mostrarem falha ou ambiguidade no ciclo de vida da mensagem one-shot.
+1. **Instrumentar o transporte one-shot atual (concluída).** Os registros correlacionados provaram que o content script inicia `sendMessage`, mas não recebe resposta em 35 segundos e o background não registra recebimento.
+2. **Usar uma conexão `chrome.runtime.Port` (candidata selecionada pela evidência; execução pendente).** O content script estabelece uma conexão com o background, negocia a aba/sessão, envia eventos com identificador estável e recebe ACK/NACK após o host aceitar `trace.ingest`. A conexão pode ser reaberta após desconexão e retransmitir eventos não confirmados. O plano para implementar essa alternativa ainda precisa de aprovação.
 3. **Mover captura/encaminhamento para mais código de página.** Não selecionada: o mundo principal não dispõe das APIs `chrome.runtime`; ainda precisaria de uma ponte de eventos para o content script e aumentaria a superfície de mensagens não confiáveis. Não remove as fronteiras que precisam ser diagnosticadas.
 
 ## Fase 1: instrumentação do transporte atual
@@ -80,21 +83,20 @@ Usar `traceId`, `tabId` e o `eventId` já criado para o clique como correlação
 
 Os sinais de diagnóstico devem ficar restritos ao build de fixture/teste ou usar logging de desenvolvimento controlado. Nenhum detalhe privado da aplicação deve aparecer no console de produção.
 
-### Resultado esperado da instrumentação
+### Resultado da instrumentação
 
-A próxima execução deve permitir classificar a falha em uma destas fronteiras, sem inferência a partir do evento `legacylens:select`:
+O run `1381b09` classificou a falha na fronteira de entrega/resposta content→background. Para o mesmo trace e evento:
 
-- content script não tentou enviar;
-- mensagem não foi entregue ao background;
-- background recebeu, mas rejeitou/removiu por validação ou estado;
-- background iniciou `trace.ingest`, mas o host/core não confirmou;
-- host confirmou, mas a consulta do teste usou sessão/projeto incorretos ou ainda não encontrou o evento.
+- `content.selection.accepted` e `content.send.started` foram registrados;
+- nenhum `background.receive` foi registrado;
+- `content.send.timeout` terminou após 35.002 ms;
+- `investigation.get` não retornou o evento.
 
-Não migrar para `Port` se a evidência localizar o defeito em validação, identidade do trace, host ou consulta; corrigir a fronteira identificada e preservar o transporte atual.
+O evento não chegou à validação do background, ao host ou à consulta. A resposta one-shot não foi confiável neste caminho; o redesenho com Port foi planejado separadamente.
 
 ## Fase 2: redesenho condicional com `Port`
 
-Executar somente se a instrumentação confirmar que a entrega/vida útil da mensagem one-shot é a causa ou não consegue oferecer confirmação confiável.
+O gatilho desta fase foi atendido pelo run `1381b09`. Implementar somente após aprovação de `docs/superpowers/plans/2026-10-08-capture-port-reliability.md`.
 
 ### Protocolo proposto
 
@@ -143,9 +145,6 @@ Executar somente se a instrumentação confirmar que a entrega/vida útil da men
 - `tests/e2e/legacy-click.spec.ts` e `tests/e2e/modern-click.spec.ts`: asserts correlacionados por ID e estágio.
 - `tests/e2e/support/capture.ts`: apenas controles de fixture para iniciar/parar; o evento de usuário deve continuar usando o transporte de produção.
 
-## Decisões ainda condicionadas à evidência
+## Aprovação pendente para a Fase 2
 
-- Se a falha ocorre em `sendMessage`, em validação do background, em `trace.ingest` ou na consulta.
-- Se haverá uma fila de eventos na memória do content script, e qual limite e política de descarte ela terá.
-- Se a deduplicação já fornecida pelo core cobre retransmissão com o mesmo `eventId`; confirmar antes de habilitar retries.
-- Se o ACK do `Port` representa apenas aceite do background ou confirmação de persistência no host. A proposta desta spec escolhe confirmação após aceite do host.
+O follow-up define fila FIFO limitada a 100 eventos, até três reconexões, replay com o mesmo `eventId`, ACK após aceite do host, confirmação de deduplicação no core e limpeza no stop/fechamento/navegação. A implementação do Port aguarda a aprovação do plano pelo usuário.

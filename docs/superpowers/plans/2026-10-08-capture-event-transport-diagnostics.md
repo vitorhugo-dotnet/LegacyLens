@@ -188,11 +188,11 @@ Run: `LEGACYLENS_FIXTURE_EXTENSION=1 npm run build --workspace apps/extension`
 
 Expected: PASS; the tests are discovered, and fixture-only diagnostic access is included in the build.
 
-- [ ] **Step 4: Push the diagnostic implementation and inspect the Windows CI artifacts.**
+- [x] **Step 4: Push the diagnostic implementation and inspect the Windows CI artifacts.**
 
 Expected: Required checks pass. For each fixture, logs identify the last completed stage and either the exact safe error code or the matching persisted event. Do not report success based only on `legacylens:select` or Java agent events.
 
-- [ ] **Step 5: Apply the evidence gate.** If the one-shot send is not acknowledged or demonstrably loses delivery, stop and write a focused follow-up plan for the approved `Port` candidate, including retry/idempotency and lifecycle tests. If the send is acknowledged but host/query fails, fix that confirmed boundary and rerun CI without adding `Port`.
+- [x] **Step 5: Apply the evidence gate.** Run `37818722260` showed `content.send.timeout` after 35,002 ms and no `background.receive` for the same `traceId`/`eventId`; therefore the failing boundary is the one-shot content→background path. Stop this diagnostic plan and review the separate Port follow-up plan before any transport implementation.
 
 ## Conditional follow-up: `chrome.runtime.Port`
 
