@@ -4,7 +4,7 @@ import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { startFixtureCapture } from './support/capture.ts';
+import { captureDiagnostics, startFixtureCapture } from './support/capture.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const cache = join(root, '.fixture-cache');
@@ -63,7 +63,11 @@ test('captures a Jakarta Faces action and reports exact runtime capabilities', a
     }, { timeout: 30_000 }).toBe(true);
     const events = result!.events.items;
     console.log(`compatibility-baseline ${JSON.stringify({ id: 'jakarta-java21-wildfly35', captureMs: Date.now() - captureStartedAt, eventCount: result!.events.items.length, methodEventCount: events.filter((event) => event.kind === 'method.start').length, staticRelationCount: result!.relations.items.filter((relation) => relation.layer === 'static').length })}`);
-    expect(events.some((event) => event.kind === 'jsf.click')).toBe(true);
+    const click = events.find((event) => event.kind === 'jsf.click' && /^[a-f0-9]{16}$/i.test(event.eventId));
+    expect(click, `jsf.click missing; stages=${JSON.stringify(await captureDiagnostics(worker))}`).toBeDefined();
+    const clickStages = (await captureDiagnostics(worker)).filter((record) => record.traceId === traceId && record.eventId === click!.eventId);
+    expect(clickStages.map((record) => `${record.stage}.${record.outcome}`), `click transport stages=${JSON.stringify(clickStages)}`).toEqual(
+      expect.arrayContaining(['background.receive.started', 'background.receive.accepted', 'background.record.accepted', 'host.ingest.accepted']));
     expect(events.some((event) => event.kind === 'method.start' && event.metadata?.['code.class'] === 'io.legacylens.fixture.OrderBean')).toBe(true);
     const methodEvents = events.filter((event) => event.kind === 'method.start');
     expect(methodEvents.every((event) => /^deployment@loader-[a-f0-9]+$/.test(event.metadata?.['code.deployment'] ?? ''))).toBe(true);

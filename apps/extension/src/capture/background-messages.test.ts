@@ -38,6 +38,15 @@ describe('background capture event boundary', () => {
     if (code) expect(result).toMatchObject({ code });
     else expect(deps.record).toHaveBeenCalledWith(4, 'jsf.click', { source: 'x' }, { eventId });
   });
+  it('rejects absent and expired sessions without recording', async () => {
+    const absent = setup(); absent.controller.get.mockReturnValue(undefined as never);
+    await expect(handleCaptureEvent(message, sender, absent.controller as never, absent.diagnostics)).resolves.toMatchObject({ code: 'SESSION_MISMATCH' });
+    expect(absent.record).not.toHaveBeenCalled();
+    const expired = setup(); expired.controller.get.mockReturnValue({ ...active,
+      session: { ...active.session, expiresAt: new Date(Date.now() - 1).toISOString() } });
+    await expect(handleCaptureEvent(message, sender, expired.controller as never, expired.diagnostics)).resolves.toMatchObject({ code: 'SESSION_MISMATCH' });
+    expect(expired.record).not.toHaveBeenCalled();
+  });
   it('returns an explicit error if record rejects', async () => {
     const deps = setup(); deps.record.mockRejectedValue(new Error('private native detail'));
     await expect(handleCaptureEvent(message, sender, deps.controller as never, deps.diagnostics)).resolves.toMatchObject({ code: 'RECORD_FAILED' });

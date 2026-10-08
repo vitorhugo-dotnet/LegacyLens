@@ -88,8 +88,10 @@ export async function handleCaptureEvent(
     await controller.record(tabId, msg.kind, safe, { ...(eventId ? { eventId } : {}), ...(parentEventId ? { parentEventId } : {}) });
   } catch {
     diagnostics({ stage: 'background.record', outcome: 'rejected', ...correlation, code: 'RECORD_FAILED' });
+    diagnostics({ stage: 'background.receive', outcome: 'rejected', ...correlation, code: 'RECORD_FAILED' });
     return error('Capture event could not be recorded', 'RECORD_FAILED');
   }
   diagnostics({ stage: 'background.record', outcome: 'accepted', ...correlation });
+  diagnostics({ stage: 'background.receive', outcome: 'accepted', ...correlation });
   return { accepted: true, gap: active.gap };
 }

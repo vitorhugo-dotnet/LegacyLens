@@ -1,6 +1,16 @@
 import type { Page, Worker } from '@playwright/test';
 
 interface CaptureReply { ok?: boolean; session?: { id?: string }; error?: string }
+export interface CaptureStageRecord {
+  stage: string; outcome: string; traceId: string; tabId: number; eventId?: string; durationMs?: number; code?: string;
+}
+
+export async function captureDiagnostics(worker: Worker): Promise<CaptureStageRecord[]> {
+  return await worker.evaluate(() => {
+    const records = (globalThis as typeof globalThis & { __legacyLensCaptureDiagnostics?: CaptureStageRecord[] }).__legacyLensCaptureDiagnostics;
+    return records ? [...records] : [];
+  });
+}
 
 async function sendFixtureCommand(worker: Worker, page: Page, message: { type: string; projectId?: string }): Promise<CaptureReply> {
   return await worker.evaluate(async ({ url, command }) => {
