@@ -235,7 +235,8 @@ export default defineBackground(() => {
         const reply = await chrome.tabs.sendMessage(tabId, { type: 'capture.begin', projectId, session, origin, tabId }) as { ok?: boolean; error?: string };
         if (reply?.error || !reply?.ok) {
           await controller.stop(tabId);
-          throw new Error(reply?.error ?? 'Content script did not acknowledge fixture capture');
+          const phase = (globalThis as FixtureDebugGlobal).__legacylensFixturePhase ?? 'unknown';
+          throw new Error(`${reply?.error ?? 'Content script did not acknowledge fixture capture'} (background phase: ${phase})`);
         }
         return { ok: true, session };
       }
@@ -278,7 +279,10 @@ export default defineBackground(() => {
   });
 
   chrome.runtime.onConnect.addListener((port) => {
-    if (fixtureMode) setFixturePhase(`port.connect:${port.name}`);
+    if (fixtureMode) {
+      setFixturePhase(`port.connect:${port.name}`);
+      console.info(`LegacyLens fixture port connected: ${port.name}`);
+    }
     if (port.name !== CAPTURE_PORT_NAME) {
       try { port.disconnect(); } catch { /* port already closed */ }
       return;

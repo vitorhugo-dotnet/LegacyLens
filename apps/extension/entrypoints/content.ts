@@ -64,7 +64,7 @@ export default defineContentScript({
       resetCapture();
       session = nextSession;
       captureTabId = tabId;
-      capturePort = new CapturePortClient((name) => chrome.runtime.connect(chrome.runtime.id, { name }), (stage, eventId, code) => {
+      capturePort = new CapturePortClient((name) => chrome.runtime.connect({ name }), (stage, eventId, code) => {
         const outcome = stage.endsWith('ack') || stage.endsWith('ready') ? 'accepted'
           : stage.includes('timeout') ? 'timeout' : stage.includes('nack') || stage.includes('overflow') || stage.includes('invalid') || stage.includes('exhausted') ? 'rejected' : 'started';
         recordContentStage({ stage: 'content.port', outcome, traceId: nextSession.id, tabId,
