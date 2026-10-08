@@ -248,7 +248,8 @@ export default defineBackground(() => {
   chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
     const msg = message as Record<string, unknown>;
     const tabId = sender.tab?.id;
-    const senderOrigin = originOf(sender.url);
+    // Use the tab URL when a dynamically injected script has no HTTP sender URL.
+    const senderOrigin = originOf(sender.url) ?? originOf(sender.tab?.url);
     if (tabId === undefined || !senderOrigin || !msg || typeof msg.type !== 'string') return;
     const run = async () => {
       if (msg.type === 'capture.event' && typeof msg.kind === 'string' && typeof msg.sessionId === 'string') {
