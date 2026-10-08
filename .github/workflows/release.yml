@@ -9,7 +9,7 @@ jobs:
   required-checks:
     uses: ./.github/workflows/ci.yml
     permissions:
-      contents: read
+      contents: write
   publish:
     needs: required-checks
     if: ${{ always() && needs.required-checks.result == 'success' }}

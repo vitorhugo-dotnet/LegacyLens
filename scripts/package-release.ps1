@@ -46,7 +46,9 @@ try {
   $goVersion = (go version).Trim()
   $nodeVersion = (node --version).Trim()
   $javaVersion = ((java -version 2>&1 | Select-Object -First 1) -replace '.*version "([^"]+)".*','$1')
-  if (-not $env:GITHUB_REF_NAME) { $releaseVersion = '0.0.0-dev' } else { $releaseVersion = $env:GITHUB_REF_NAME }
+  if ($env:LEGACYLENS_RELEASE_VERSION) { $releaseVersion = $env:LEGACYLENS_RELEASE_VERSION }
+  elseif (-not $env:GITHUB_REF_NAME) { $releaseVersion = '0.0.0-dev' }
+  else { $releaseVersion = $env:GITHUB_REF_NAME }
   $results = [ordered]@{}
   foreach ($check in $VerifiedChecks) { $results[$check] = 'passed' }
   $requiredJavaChecks = @('java8-runtime','java8-agent-smoke','java8-analyzer-smoke','java21-runtime','java21-agent-smoke','java21-analyzer-smoke','packaged-java8-smoke','packaged-java21-smoke')

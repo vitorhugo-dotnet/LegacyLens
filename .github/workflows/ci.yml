@@ -155,6 +155,8 @@ jobs:
   windows-package:
     name: Build Windows x64 package
     runs-on: windows-latest
+    outputs:
+      release-version: ${{ steps.release-version.outputs.version }}
     needs:
       - checks
       - legacy-e2e
@@ -180,6 +182,27 @@ jobs:
       - name: Install package dependencies
         shell: pwsh
         run: npm ci
+      - name: Select date-based release version
+        id: release-version
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseDate = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(-3)).ToString('yyyyMMdd')
+          $releaseTags = @(gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" --paginate --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read existing GitHub Releases.' }
+          $latestPatch = 0
+          foreach ($tag in $releaseTags) {
+            if ($tag -match "^$releaseDate\.(\d+)$") {
+              $patch = [int]$Matches[1]
+              if ($patch -gt $latestPatch) { $latestPatch = $patch }
+            }
+          }
+          $version = "$releaseDate.$($latestPatch + 1)"
+          "LEGACYLENS_RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - name: Build Windows x64 package
         shell: pwsh
         run: ./scripts/verify.ps1 -Scope packaging -VerifiedChecks @('contracts','extension','core','java8-runtime','java8-agent-smoke','java8-analyzer-smoke','java21-runtime','java21-agent-smoke','java21-analyzer-smoke','legacy-fixture','legacy-e2e','modern-fixture','modern-e2e','redeploy')
@@ -208,3 +231,48 @@ jobs:
           path: artifacts/
           if-no-files-found: ignore
           retention-days: 14
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: windows-latest
+    needs: windows-package
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: legacylens-windows-x64-${{ github.sha }}
+          path: artifacts
+      - name: Create tag and publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.windows-package.outputs.release-version }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:RELEASE_VERSION -or $env:RELEASE_VERSION -notmatch '^\d{8}\.\d+$') {
+            throw 'The date-based release version is missing or invalid.'
+          }
+          $zip = 'artifacts/legacylens-windows-x64.zip'
+          $checksums = 'artifacts/SHA256SUMS.txt'
+          if (-not (Test-Path $zip) -or -not (Test-Path $checksums)) {
+            throw 'The verified Windows package or its checksums are missing.'
+          }
+          $checksumLine = (Get-Content $checksums -Raw).Trim()
+          if ($checksumLine -notmatch '^([0-9a-fA-F]{64})\s+legacylens-windows-x64\.zip$') {
+            throw 'Checksum file does not identify the expected package.'
+          }
+          $actualHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($Matches[1].ToLowerInvariant() -ne $actualHash) { throw 'Package SHA-256 does not match its checksum file.' }
+          $expandedPath = Join-Path $env:RUNNER_TEMP 'legacylens-auto-release'
+          Expand-Archive -LiteralPath $zip -DestinationPath $expandedPath -Force
+          $manifestPath = Join-Path $expandedPath 'release-manifest.json'
+          if (-not (Test-Path $manifestPath)) { throw 'Release manifest is missing from package.' }
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          if ($manifest.version -ne $env:RELEASE_VERSION -or $manifest.commit -ne $env:GITHUB_SHA) {
+            throw 'Package manifest does not match the release version and source commit.'
+          }
+          gh release create $env:RELEASE_VERSION $zip $checksums --target $env:GITHUB_SHA --title "LegacyLens $env:RELEASE_VERSION" --generate-notes
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish GitHub Release $env:RELEASE_VERSION." }

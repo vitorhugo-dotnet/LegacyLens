@@ -10,7 +10,7 @@ LegacyLens é uma ferramenta local em desenvolvimento para investigar aplicaçõ
 - Host nativo Windows para comunicação local entre extensão e core.
 - Contratos versionados para mensagens e eventos.
 
-A análise Java estática e o worker Java estão implementados; suporte amplo a linguagens e a fixture moderna ainda não estão concluídos. O fluxo E2E da fixture antiga está falhando; CI executa esse cenário e deve permanecer vermelho até sua correção. Não há validação concluída contra o sistema privado nem em Windows 10.
+A análise Java estática, o worker Java e as fixtures antiga e moderna estão implementados. Os fluxos E2E das duas fixtures passaram no CI do commit atual. Isso ainda não representa validação contra o sistema privado nem em Windows 10.
 
 ## Arquitetura
 
@@ -29,7 +29,7 @@ go -C core test ./...
 mvn -f java/pom.xml -pl agent,analyzer -am verify
 ```
 
-O E2E requer Chromium de teste e a fixture local Maven; sua falha atual é conhecida e não representa validação de uma instalação real. O empacotamento inicial é Windows x64 e inclui core, host nativo, extensão unpacked, agente e analyzer Java sombreado:
+O E2E requer Chromium de teste e a fixture local Maven. O empacotamento inicial é Windows x64 e inclui core, host nativo, extensão unpacked, agente e analyzer Java sombreado:
 
 ```powershell
 ./scripts/package-release.ps1
@@ -37,8 +37,26 @@ O E2E requer Chromium de teste e a fixture local Maven; sua falha atual é conhe
 
 Esse pacote é experimental e não promete instalador, registro automático do host ou compatibilidade validada com uma máquina privada. A extensão deve ser carregada como unpacked e sua identidade precisa corresponder à configuração do host antes de uma futura instalação assistida.
 
+## Como usar
+
+1. Baixe o `legacylens-windows-x64.zip` mais recente na aba [Releases](https://github.com/vitorhugo-dotnet/LegacyLens/releases) e extraia-o numa pasta permanente.
+2. Carregue a pasta `extension` no Chrome ou Edge pela página de extensões, com o modo de desenvolvedor ativado.
+3. Registre o host nativo para o ID da extensão e registre a pasta-fonte que deseja investigar. Os comandos completos estão em [Instalação no Windows](docs/user/windows-installation.md).
+
+   ```powershell
+   .\scripts\install-native-host.ps1 -PackageDirectory 'C:\Program Files\LegacyLens' -ExtensionId '<ID exibido pelo navegador>'
+   .\legacylens.exe project register --root 'C:\src\MinhaAplicacao' --name 'MinhaAplicacao'
+   .\legacylens.exe serve
+   ```
+
+4. Deixe o terminal com `serve` aberto. Abra a aplicação JSF no Chrome ou Edge, escolha o projeto registrado no controle da extensão sobre a página e inicie uma captura antes de realizar a interação. Ao parar a captura, a extensão abre a investigação; também é possível indexar o projeto e buscar código na página de investigação. Os dados do projeto são mantidos localmente. Em outro terminal, execute ` .\legacylens.exe status` para verificar se o core está respondendo.
+
+### Publicação de releases
+
+Um push para `main` publica automaticamente uma Release depois que os testes e a criação do pacote Windows terminarem com sucesso. O workflow cria uma tag no formato `DATA.PATCH`, usando a data de `America/Fortaleza` e o próximo número livre entre as Releases do mesmo dia: por exemplo, `20261008.1` e depois `20261008.2`. O número não depende das execuções do GitHub Actions. A Release recebe o ZIP e `SHA256SUMS.txt`; pull requests e pushes em outras branches não publicam.
+
 ## Estado e limitações
 
-O workflow de CI executa contratos, core, extensão, agente, fixture antiga e E2E. A release por tag `v*` só publica quando o workflow reutilizável termina com sucesso para o mesmo SHA da tag; falha, cancelamento ou job ignorado bloqueiam publicação. Até o E2E passar, releases ficam bloqueadas.
+O workflow de CI executa contratos, core, extensão, agente, fixtures antiga e moderna e seus fluxos E2E. A publicação automática em `main` depende do sucesso de todos esses jobs e do empacotamento verificado. O fluxo separado acionado por tags `v*` também exige que o workflow reutilizável termine com sucesso para o mesmo SHA da tag; falha, cancelamento ou job ignorado bloqueiam essa publicação.
 
-O workflow instala o Chromium do Playwright, verifica o agente e o analyzer sombreado nos runtimes Java 8 e 21, e executa smokes do core, agente e analyzer empacotados. O smoke do core roda com Go e Node ausentes do `PATH`. Essas verificações não corrigem uma falha do E2E: pacote e publicação continuam condicionados ao cenário da fixture antiga e à fixture moderna com redeploy. O manifesto registra o analyzer como concluído e mantém a fixture moderna pendente; o workflow de release exige ambos os estados concluídos e os artefatos listados. Ainda faltam testes de instalação/remoção do host e validação do sistema real em Windows 10. CI verde não provará compatibilidade com o sistema privado.
+O workflow instala o Chromium do Playwright, verifica o agente e o analyzer sombreado nos runtimes Java 8 e 21, e executa smokes do core, agente e analyzer empacotados. O smoke do core roda com Go e Node ausentes do `PATH`. Pacote e publicação continuam condicionados aos E2E das fixtures antiga e moderna com redeploy. O manifesto registra o analyzer e a fixture moderna como concluídos e o workflow de release exige esses estados e os artefatos listados. Ainda faltam testes de instalação/remoção do host e validação do sistema real em Windows 10. CI verde não prova compatibilidade com o sistema privado.
