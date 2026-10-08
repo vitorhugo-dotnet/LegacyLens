@@ -1,10 +1,13 @@
 import type { CaptureSession, Event } from '@legacylens/contracts/src/protocol.ts';
 import type { CommandClient } from '../native/client.ts';
+import { NativeRequestError } from '../native/client.ts';
+import type { CaptureStageRecord } from './diagnostics.ts';
 
 export interface CaptureRequest { projectId: string; tabId: number; origin: string }
 export interface ActiveCapture { request: CaptureRequest; session: CaptureSession; producerId: string; sequence: number; gap: boolean }
 export interface SessionStore { load(): Promise<ActiveCapture[]>; save(captures: ActiveCapture[]): Promise<void> }
 export interface EventIdentity { eventId?: string; parentEventId?: string }
+export type CaptureControllerDiagnostics = (record: CaptureStageRecord) => void;
 
 function randomHex(bytes: number): string {
   return [...crypto.getRandomValues(new Uint8Array(bytes))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -17,7 +20,8 @@ export class CaptureController {
   private recording = new Map<number, Promise<void>>();
   private loading?: Promise<void>;
 
-  constructor(private readonly client: CommandClient, private readonly store?: SessionStore) {}
+  constructor(private readonly client: CommandClient, private readonly store?: SessionStore,
+    private readonly diagnostics: CaptureControllerDiagnostics = () => {}) {}
 
   async restore(): Promise<void> {
     if (!this.store) return;
@@ -113,7 +117,16 @@ export class CaptureController {
       sequence: ++entry.sequence, eventId: identity.eventId ?? randomHex(8), ...(identity.parentEventId ? { parentEventId: identity.parentEventId } : {}),
       kind, occurredAt: new Date().toISOString(), metadata };
     await this.persist();
-    await this.client.request('trace.ingest', { projectId: entry.request.projectId, events: [event] });
+    const correlation = { traceId: entry.session.id, tabId: entry.request.tabId, eventId: event.eventId };
+    this.diagnostics({ stage: 'host.ingest', outcome: 'started', ...correlation });
+    try {
+      await this.client.request('trace.ingest', { projectId: entry.request.projectId, events: [event] });
+      this.diagnostics({ stage: 'host.ingest', outcome: 'accepted', ...correlation });
+    } catch (error) {
+      const code = error instanceof NativeRequestError ? error.code.toUpperCase().replaceAll('-', '_') : 'NATIVE_ERROR';
+      this.diagnostics({ stage: 'host.ingest', outcome: error instanceof NativeRequestError && error.code === 'timeout' ? 'timeout' : 'rejected', ...correlation, code });
+      throw error;
+    }
   }
 
   private async persist(): Promise<void> { await this.store?.save([...this.captures.values()]); }

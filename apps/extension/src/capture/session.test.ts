@@ -1,7 +1,33 @@
 import { describe, expect, it } from 'vitest';
 import { CaptureController } from './session.ts';
+import { NativeRequestError } from '../native/client.ts';
 
 describe('CaptureController', () => {
+  it('correlates host ingest acceptance and safe failures with the click identity', async () => {
+    const accepted: unknown[] = [];
+    const successful = new CaptureController({ request: async <T>(command: string): Promise<T> => command === 'capture.start'
+      ? { id: 'a'.repeat(32), projectId: 'project', expiresAt: new Date(Date.now() + 60000).toISOString() } as T : {} as T
+    }, undefined, (record) => accepted.push(record));
+    await successful.start({ projectId: 'project', tabId: 19, origin: 'https://app.example' });
+    await successful.record(19, 'jsf.click', { source: 'sensitive-form-name' }, { eventId: 'b'.repeat(16) });
+    expect(accepted).toEqual([
+      { stage: 'host.ingest', outcome: 'started', traceId: 'a'.repeat(32), tabId: 19, eventId: 'b'.repeat(16) },
+      { stage: 'host.ingest', outcome: 'accepted', traceId: 'a'.repeat(32), tabId: 19, eventId: 'b'.repeat(16) },
+    ]);
+    expect(JSON.stringify(accepted)).not.toContain('sensitive-form-name');
+
+    const timedOut: unknown[] = [];
+    const failed = new CaptureController({ request: async <T>(command: string): Promise<T> => {
+      if (command === 'capture.start') return { id: 'c'.repeat(32), projectId: 'project', expiresAt: new Date(Date.now() + 60000).toISOString() } as T;
+      throw new NativeRequestError('timeout', 'private native detail');
+    } }, undefined, (record) => timedOut.push(record));
+    await failed.start({ projectId: 'project', tabId: 20, origin: 'https://app.example' });
+    await expect(failed.record(20, 'jsf.click', { source: 'another-secret' }, { eventId: 'd'.repeat(16) })).rejects.toThrow('transport interrupted');
+    expect(timedOut.at(-1)).toEqual({ stage: 'host.ingest', outcome: 'timeout', traceId: 'c'.repeat(32), tabId: 20,
+      eventId: 'd'.repeat(16), code: 'TIMEOUT' });
+    expect(JSON.stringify(timedOut)).not.toContain('private native detail');
+    expect(JSON.stringify(timedOut)).not.toContain('another-secret');
+  });
   it('writes the selected click as the network event parent in the ingested protocol', async () => {
     const events: Array<{ eventId: string; parentEventId?: string; kind: string }> = [];
     const controller = new CaptureController({ request: async <T>(command: string, payload: unknown): Promise<T> => {
