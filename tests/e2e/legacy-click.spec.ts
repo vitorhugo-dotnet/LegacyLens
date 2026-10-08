@@ -68,9 +68,13 @@ test('selected save traverses two exact request spans into JSF, bean, service, D
 
     await startFixtureCapture(worker,page,state.projectId);
     await expect.poll(activeTrace,{timeout:15_000,message:'FIXTURE_SETUP: native host did not start a capture'}).toMatch(/^[0-9a-f]{32}$/);
+    await expect.poll(() => page.evaluate(() => (window as any).__legacyLensProbe.some((event:{name:string})=>event.name==='legacylens:start')),
+      {timeout:5_000,message:'FIXTURE_SETUP: page-world capture handshake did not start'}).toBe(true);
     const domTrace = await activeTrace();
     await page.locator('#domOnly').click();
     await expect(page.locator('#domOnly')).toHaveText('DOM changed');
+    await expect.poll(() => page.evaluate(() => (window as any).__legacyLensProbe.some((event:{name:string})=>event.name==='legacylens:select')),
+      {timeout:5_000,message:'FIXTURE_SETUP: click selection was not observed by the content script'}).toBe(true);
     await expect.poll(async()=> (await investigation(domTrace)).events.total).toBeGreaterThanOrEqual(1);
     const dom = await investigation(domTrace);
     expect(dom.events.items.some((event)=>event.kind==='jsf.click')).toBe(true);

@@ -203,7 +203,7 @@ export default defineBackground(() => {
         if (!projectId) throw new Error('Fixture capture needs a project ID');
         const selected = ((await chrome.storage.session.get(selectedProjectsKey))[selectedProjectsKey] ?? {}) as Record<string, string>;
         await chrome.storage.session.set({ [selectedProjectsKey]: { ...selected, [String(tabId)]: projectId } });
-        const session = await startCapture(tab, { requestPermission: false, projectId, notifyContent: false, injectScripts: false });
+        const session = await startCapture(tab, { requestPermission: false, projectId, notifyContent: false });
         if (!session) throw new Error(`Fixture capture did not start (background phase: ${(globalThis as FixtureDebugGlobal).__legacylensFixturePhase ?? 'unknown'})`);
         const origin = originOf(tab.url);
         if (!origin) throw new Error('Fixture tab does not have an HTTP origin');
